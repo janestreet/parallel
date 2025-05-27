@@ -1,0 +1,6 @@
+(library
+ (name parallel_scheduler_work_stealing)
+ (public_name parallel.scheduler.work_stealing)
+ (libraries base parallel_kernel portable portable.ws_deque)
+ (preprocess
+  (pps ppx_jane)))

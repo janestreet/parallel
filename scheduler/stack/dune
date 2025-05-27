@@ -1,0 +1,6 @@
+(library
+ (name parallel_scheduler_stack)
+ (public_name parallel.scheduler.stack)
+ (libraries base parallel_kernel portable)
+ (preprocess
+  (pps ppx_jane)))

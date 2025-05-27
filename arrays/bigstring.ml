@@ -1,0 +1,108 @@
+open! Base
+open! Import
+module Bigstring = Base_bigstring
+
+module Kind = struct
+  type 'a t =
+    | Int8 : Int_repr.int8 t
+    | Int16 : Int_repr.int16 t
+    | Int32 : int32 t
+    | Int64 : int64 t
+    | Float32 : float32 t
+    | Float64 : float t
+  [@@deriving sexp_of]
+
+  let[@inline] width (type a) : a t -> int = function
+    | Int8 -> 1
+    | Int16 -> 2
+    | Int32 -> 4
+    | Int64 -> 8
+    | Float32 -> 4
+    | Float64 -> 8
+  ;;
+end
+
+type 'a t =
+  { kind : 'a Kind.t
+  ; data : Bigstring.t
+  }
+[@@deriving sexp_of]
+
+external length : Bigstring.t @ contended -> int @@ portable = "%caml_ba_dim_1"
+
+let[@inline] with_kind_exn kind data =
+  if Bigstring.length data % Kind.width kind <> 0
+  then invalid_arg "Bigstring length not divisible by element width.";
+  { kind; data }
+;;
+
+let[@inline] empty kind =
+  { kind
+  ; data = Portability_hacks.magic_uncontended__promise_deeply_immutable Bigstring.empty
+  }
+;;
+
+let[@inline] create kind n = { kind; data = Bigstring.create (n * Kind.width kind) }
+let[@inline] kind { kind; _ } = kind
+let[@inline] data { data; _ } = data
+
+let%template[@inline] copy { kind; data } =
+  { kind; data = Bigstring.copy (Obj.magic_uncontended data) }
+[@@mode m = (uncontended, shared)]
+;;
+
+let[@inline] length { kind; data } = length data / Kind.width kind
+
+let[@inline] get (type a) { kind : a Kind.t; data } pos : a =
+  let pos = pos * Kind.width kind in
+  match kind with
+  | Int8 -> (Bigstring.Int_repr.get_int8 [@inlined]) data ~pos
+  | Int16 -> (Bigstring.Int_repr.get_int16_le [@inlined]) data ~pos
+  | Int32 -> (Bigstring.get_int32_t_le [@inlined]) data ~pos
+  | Int64 -> (Bigstring.get_int64_t_le [@inlined]) data ~pos
+  | Float32 -> Float32.Bigstring.get data ~pos
+  | Float64 -> Int64.float_of_bits ((Bigstring.get_int64_t_le [@inlined]) data ~pos)
+;;
+
+let[@inline] set (type a) { kind : a Kind.t; data } pos (a : a) =
+  let pos = pos * Kind.width kind in
+  match kind with
+  | Int8 -> (Bigstring.Int_repr.set_int8 [@inlined]) data ~pos a
+  | Int16 -> (Bigstring.Int_repr.set_int16_le [@inlined]) data ~pos a
+  | Int32 -> (Bigstring.set_int32_t_le [@inlined]) data ~pos a
+  | Int64 -> (Bigstring.set_int64_t_le [@inlined]) data ~pos a
+  | Float32 -> Float32.Bigstring.set data ~pos a
+  | Float64 -> (Bigstring.set_int64_t_le [@inlined]) data ~pos (Int64.bits_of_float a)
+;;
+
+let[@inline] unsafe_get (type a) { kind : a Kind.t; data } pos : a =
+  let pos = pos * Kind.width kind in
+  match kind with
+  | Int8 -> (Bigstring.Int_repr.Unsafe.get_int8 [@inlined]) data ~pos
+  | Int16 -> (Bigstring.Int_repr.Unsafe.get_int16_le [@inlined]) data ~pos
+  | Int32 -> (Bigstring.unsafe_get_int32_t_le [@inlined]) data ~pos
+  | Int64 -> (Bigstring.unsafe_get_int64_t_le [@inlined]) data ~pos
+  | Float32 -> Float32.Bigstring.unsafe_get data ~pos
+  | Float64 ->
+    Int64.float_of_bits ((Bigstring.unsafe_get_int64_t_le [@inlined]) data ~pos)
+;;
+
+let[@inline] unsafe_set (type a) { kind : a Kind.t; data } pos (a : a) =
+  let pos = pos * Kind.width kind in
+  match kind with
+  | Int8 -> (Bigstring.Int_repr.Unsafe.set_int8 [@inlined]) data ~pos a
+  | Int16 -> (Bigstring.Int_repr.Unsafe.set_int16_le [@inlined]) data ~pos a
+  | Int32 -> (Bigstring.unsafe_set_int32_t_le [@inlined]) data ~pos a
+  | Int64 -> (Bigstring.unsafe_set_int64_t_le [@inlined]) data ~pos a
+  | Float32 -> Float32.Bigstring.unsafe_set data ~pos a
+  | Float64 ->
+    (Bigstring.unsafe_set_int64_t_le [@inlined]) data ~pos (Int64.bits_of_float a)
+;;
+
+module Expert = struct
+  let[@inline] unsafe_racy_get_contended t pos = unsafe_get (Obj.magic_uncontended t) pos
+
+  let[@inline] unsafe_racy_set_contended t pos a =
+    unsafe_set (Obj.magic_uncontended t) pos a
+  ;;
+end

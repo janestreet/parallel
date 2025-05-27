@@ -1,0 +1,260 @@
+open! Core
+open! Import
+
+let rec fib n =
+  match n with
+  | 0 | 1 -> 1
+  | n -> fib (n - 1) + fib (n - 2)
+;;
+
+let fib4 parallel =
+  let (x, y), (z, w) =
+    Parallel.fork_join2
+      parallel
+      (fun parallel -> Parallel.fork_join2 parallel (fun _ -> fib 10) (fun _ -> fib 10))
+      (fun parallel -> Parallel.fork_join2 parallel (fun _ -> fib 10) (fun _ -> fib 10))
+  in
+  x + y + z + w
+;;
+
+let rec fib_par parallel n =
+  match n with
+  | 0 | 1 -> 1
+  | n ->
+    let a, b =
+      Parallel.fork_join2
+        parallel
+        (fun parallel -> fib_par parallel (n - 1))
+        (fun parallel -> fib_par parallel (n - 2))
+    in
+    a + b
+;;
+
+module Test_scheduler (Scheduler : Common.Scheduler) = struct
+  let monitor = Parallel.Monitor.create_root ()
+  let scheduler = Scheduler.configure (Scheduler.create [@alert "-experimental"]) ()
+
+  let%expect_test "fib4" =
+    Scheduler.schedule scheduler ~monitor ~f:(fun parallel -> printf "%d" (fib4 parallel));
+    [%expect {| 356 |}]
+  ;;
+
+  let%expect_test "fib_par" =
+    Scheduler.schedule scheduler ~monitor ~f:(fun parallel ->
+      printf "%d" (fib_par parallel 10));
+    [%expect {| 89 |}]
+  ;;
+
+  let%expect_test "f3" =
+    Scheduler.schedule scheduler ~monitor ~f:(fun parallel ->
+      let a, b, c = Parallel.fork_join3 parallel (fun _ -> 1) (fun _ -> 2) (fun _ -> 3) in
+      printf "%d" (a + b + c));
+    [%expect {| 6 |}]
+  ;;
+
+  let%expect_test "f4" =
+    Scheduler.schedule scheduler ~monitor ~f:(fun parallel ->
+      let a, b, c, d =
+        Parallel.fork_join4 parallel (fun _ -> 1) (fun _ -> 2) (fun _ -> 3) (fun _ -> 4)
+      in
+      printf "%d" (a + b + c + d));
+    [%expect {| 10 |}]
+  ;;
+
+  let%expect_test "f5" =
+    Scheduler.schedule scheduler ~monitor ~f:(fun parallel ->
+      let a, b, c, d, e =
+        Parallel.fork_join5
+          parallel
+          (fun _ -> 1)
+          (fun _ -> 2)
+          (fun _ -> 3)
+          (fun _ -> 4)
+          (fun _ -> 5)
+      in
+      printf "%d" (a + b + c + d + e));
+    [%expect {| 15 |}]
+  ;;
+
+  let%expect_test "fN" =
+    Scheduler.schedule scheduler ~monitor ~f:(fun parallel ->
+      let [ a; b; c; d; e; f ] =
+        Parallel.fork_join
+          parallel
+          [ (fun _ -> 1)
+          ; (fun _ -> 2.0)
+          ; (fun _ -> 3l)
+          ; (fun _ -> 4L)
+          ; (fun _ -> 5n)
+          ; (fun _ -> 6.0s)
+          ]
+      in
+      printf
+        "%f"
+        (Int.to_float a
+         +. b
+         +. Int32.to_float c
+         +. Int64.to_float d
+         +. Nativeint.to_float e
+         +. Float32.to_float f));
+    [%expect {| 21.000000 |}]
+  ;;
+
+  let%expect_test "for" =
+    List.iter [ 1; 5; 10; 13 ] ~f:(fun grain ->
+      Scheduler.schedule scheduler ~monitor ~f:(fun parallel ->
+        let a = Atomic.make 0 in
+        Parallel.for_ ~grain parallel ~start:0 ~stop:10 ~f:(fun _ i -> Atomic.add a i);
+        printf "%d" (Atomic.get a));
+      [%expect {| 45 |}])
+  ;;
+
+  let%expect_test "for invalid grain" =
+    Expect_test_helpers_core.require_does_raise (fun () ->
+      Scheduler.schedule scheduler ~monitor ~f:(fun parallel ->
+        Parallel.for_ ~grain:0 parallel ~start:0 ~stop:0 ~f:(fun _ _ -> ())));
+    [%expect
+      {|
+      (panic.ml.Panic (
+        Incident (
+          (id "<id elided in test>")
+          (exn (Invalid_argument "grain < 1"))
+          (backtrace ("<backtrace elided in test>")))))
+      |}]
+  ;;
+
+  let%expect_test "fold" =
+    List.iter [ 1; 5; 10; 13 ] ~f:(fun grain ->
+      Scheduler.schedule scheduler ~monitor ~f:(fun parallel ->
+        let fold_n n =
+          Parallel.fold
+            ~grain
+            parallel
+            ~init:#(0, (~start:0, ~stop:n))
+            ~next:(fun _ acc (~start, ~stop) ->
+              if start = stop
+              then Pair_or_null.none ()
+              else Pair_or_null.some (acc + 1) (~start:(start + 1), ~stop))
+            ~fork:(fun _ (~start, ~stop) ->
+              let pivot = start + ((stop - start) / 2) in
+              if pivot < start + grain
+              then Pair_or_null.none ()
+              else Pair_or_null.some (~start, ~stop:pivot) (~start:pivot, ~stop))
+            ~join:(fun _ a b -> a + b)
+        in
+        printf "%d\n" (fold_n 10);
+        printf "%d\n" (fold_n 10_000));
+      [%expect
+        {|
+        10
+        10000
+        |}])
+  ;;
+
+  let%expect_test "fold invalid grain" =
+    Expect_test_helpers_core.require_does_raise (fun () ->
+      Scheduler.schedule scheduler ~monitor ~f:(fun parallel ->
+        Parallel.fold
+          ~grain:0
+          parallel
+          ~init:#((), ())
+          ~next:(fun _ () () -> Pair_or_null.none ())
+          ~fork:(fun _ () -> Pair_or_null.none ())
+          ~join:(fun _ () () -> ())));
+    [%expect
+      {|
+      (panic.ml.Panic (
+        Incident (
+          (id "<id elided in test>")
+          (exn (Invalid_argument "grain < 1"))
+          (backtrace ("<backtrace elided in test>")))))
+      |}]
+  ;;
+end
+
+include Common.Test_schedulers (Test_scheduler)
+
+let%expect_test "sequential ordering" =
+  let monitor = Parallel.Monitor.create_root () in
+  let scheduler = Parallel.Scheduler.Sequential.create () in
+  Parallel.Scheduler.Sequential.schedule scheduler ~monitor ~f:(fun parallel ->
+    let _ : _ =
+      Parallel.fork_join2
+        parallel
+        (fun _ -> print_endline "1")
+        (fun _ -> print_endline "2")
+    in
+    print_endline "---";
+    let _ : _ =
+      Parallel.fork_join3
+        parallel
+        (fun _ -> print_endline "1")
+        (fun _ -> print_endline "2")
+        (fun _ -> print_endline "3")
+    in
+    print_endline "---";
+    let _ : _ =
+      Parallel.fork_join4
+        parallel
+        (fun _ -> print_endline "1")
+        (fun _ -> print_endline "2")
+        (fun _ -> print_endline "3")
+        (fun _ -> print_endline "4")
+    in
+    print_endline "---";
+    let _ : _ =
+      Parallel.fork_join5
+        parallel
+        (fun _ -> print_endline "1")
+        (fun _ -> print_endline "2")
+        (fun _ -> print_endline "3")
+        (fun _ -> print_endline "4")
+        (fun _ -> print_endline "5")
+    in
+    print_endline "---";
+    let _ : _ =
+      Parallel.fork_join
+        parallel
+        [ (fun _ -> print_endline "1")
+        ; (fun _ -> print_endline "2")
+        ; (fun _ -> print_endline "3")
+        ; (fun _ -> print_endline "4")
+        ; (fun _ -> print_endline "5")
+        ; (fun _ -> print_endline "6")
+        ; (fun _ -> print_endline "7")
+        ; (fun _ -> print_endline "8")
+        ; (fun _ -> print_endline "9")
+        ]
+    in
+    ());
+  [%expect
+    {|
+    1
+    2
+    ---
+    1
+    2
+    3
+    ---
+    1
+    2
+    3
+    4
+    ---
+    1
+    2
+    3
+    4
+    5
+    ---
+    1
+    2
+    3
+    4
+    5
+    6
+    7
+    8
+    9
+    |}]
+;;

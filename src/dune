@@ -1,0 +1,6 @@
+(library
+ (name parallel)
+ (public_name parallel)
+ (libraries parallel_arrays parallel_kernel parallel_sequence)
+ (preprocess
+  (pps ppx_jane)))

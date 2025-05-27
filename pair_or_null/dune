@@ -1,0 +1,6 @@
+(library
+ (name pair_or_null)
+ (public_name parallel.pair_or_null)
+ (libraries base)
+ (preprocess
+  (pps ppx_jane)))

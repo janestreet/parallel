@@ -1,0 +1,2 @@
+set -euo pipefail
+export TEST_DIR="$(cd "$(dirname "$BASH_SOURCE")" && pwd)"

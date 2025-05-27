@@ -1,0 +1,6 @@
+(executables
+ (modes byte exe)
+ (names parallel_monitor_on_panic parallel_async_on_panic)
+ (libraries parallel parallel_scheduler_stack)
+ (preprocess
+  (pps ppx_jane)))
