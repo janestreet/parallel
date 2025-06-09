@@ -1,0 +1,5 @@
+(executable
+ (public_name oxcaml-hacking)
+ (name main)
+ (libraries oxcaml_hacking)
+ (link_flags -linkall))

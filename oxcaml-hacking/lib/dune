@@ -1,0 +1,4 @@
+(library
+ (name oxcaml_hacking)
+ (libraries core_bench.inline_benchmarks parallel.bench)
+ (library_flags -linkall))
