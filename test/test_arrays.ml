@@ -795,11 +795,11 @@ module Test_scheduler (Scheduler : Common.Scheduler) = struct
     let int_kinds
       ~(f :
           ('a : immutable_data).
-          'a t
+          ('a t
           -> of_int:(int -> 'a) @ portable
           -> to_int:('a @ local -> int) @ portable
-          -> unit
-          @@ local)
+          -> unit)
+          @ local)
       =
       f Int8 ~of_int:Int_repr.Int8.of_base_int_exn ~to_int:(fun a ->
         Int_repr.Int8.to_base_int a);

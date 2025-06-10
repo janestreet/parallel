@@ -1,5 +1,4 @@
 open! Base
-module Obj = Stdlib.Obj
 
 module Option : sig @@ portable
   include module type of Option

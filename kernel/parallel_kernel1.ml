@@ -25,8 +25,7 @@ let[@inline] create_parallel
   let heartbeats = Atomic.get heartbeat_counter in
   if heartbeats = -1 then start_heartbeating ~interval_us:Env.heartbeat_interval_us;
   let queue =
-    Capsule.Data.Local.create (fun () : Parallel_kernel0.Runqueue.t ->
-      exclave_
+    Capsule.Data.Local.create (fun () : Parallel_kernel0.Runqueue.t -> exclave_
       { promote = scheduler.#promote
       ; wake = scheduler.#wake
       ; head = Q (Stack_pointer.null ())

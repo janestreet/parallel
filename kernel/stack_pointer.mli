@@ -7,7 +7,7 @@ open! Import
     This allows us to have pointers from one locals stack into another, or even from the
     heap into a locals stack. This is very unsafe! We must exercise extreme caution that
     pointees will be live _and not moved by the GC_ for the pointer's lifetime. *)
-type 'a t : word mod external_
+type 'a t : word mod everything
 
 val null : unit -> 'a t
 val equal : 'a t @ local -> 'b t @ local -> bool

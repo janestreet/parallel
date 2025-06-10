@@ -7,12 +7,15 @@ module type Get = sig @@ portable
   (** [length t] returns the number of elements in [t]. *)
   val length : 'a t @ contended -> int
 
+  [%%template:
+  [@@@mode.default m = (uncontended, shared)]
+
   (** [get t i] reads the element at index [i]. Raises [Invalid_arg] if [i] is not in the
       range \[0..length t). *)
-  val get : 'a t @ portable -> int -> 'a @ portable
+  val get : 'a t @ m portable -> int -> 'a @ m portable
 
   (** [unsafe_get t i] unsafely reads the element at index [i]. *)
-  val unsafe_get : 'a t @ portable -> int -> 'a @ portable
+  val unsafe_get : 'a t @ m portable -> int -> 'a @ m portable]
 end
 
 module type Set = sig @@ portable
@@ -697,7 +700,8 @@ module type Parallel_arrays = sig @@ portable
       }
     [@@deriving sexp_of]
 
-    val with_kind_exn : 'a Bigstring.Kind.t -> Base_bigstring.t -> 'a t
+    val%template with_kind_exn : 'a Bigstring.Kind.t -> Base_bigstring.t @ m -> 'a t @ m
+    [@@mode m = (uncontended, shared)]
 
     include Get with type 'a t := 'a t (** @inline *)
 

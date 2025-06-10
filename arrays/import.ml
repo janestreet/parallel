@@ -50,7 +50,12 @@ module Array : sig @@ portable
   val empty : unit -> 'a t @ portable
   val length : 'a t @ contended -> int
 
-  val%template copy : 'a t @ m -> 'a t @ m [@@mode m = (uncontended, shared)]
+  [%%template:
+  [@@@mode.default m = (uncontended, shared)]
+
+  val copy : 'a t @ m -> 'a t @ m
+  val get : 'a t @ m -> int -> 'a @ m
+  val unsafe_get : 'a t @ m -> int -> 'a @ m]
 
   val unsafe_racy_get_contended : 'a t @ contended -> int -> 'a @ contended
   val unsafe_racy_set_contended : 'a t @ contended -> int -> 'a -> unit
@@ -67,6 +72,12 @@ end = struct
 
   let%template[@inline] copy t = copy (Obj.magic_uncontended t)
   [@@mode m = (uncontended, shared)]
+  ;;
+
+  let%template[@inline] [@mode shared] get t i = get (Obj.magic_uncontended t) i
+
+  let%template[@inline] [@mode shared] unsafe_get t i =
+    unsafe_get (Obj.magic_uncontended t) i
   ;;
 
   external unsafe_racy_get_contended
@@ -92,11 +103,13 @@ module Iarray : sig @@ portable
   val length : 'a t @ contended -> int
   val unsafe_racy_get_contended : 'a t @ contended -> int -> 'a @ contended
 
-  val%template unsafe_to_array__promise_no_mutation_portable : 'a t @ m -> 'a array
-  [@@mode m = (uncontended, shared)]
+  [%%template:
+  [@@@mode.default m = (uncontended, shared)]
 
-  val%template unsafe_of_array__promise_no_mutation_portable : 'a array @ m -> 'a t
-  [@@mode m = (uncontended, shared)]
+  val get : 'a t @ m -> int -> 'a @ m
+  val unsafe_get : 'a t @ m -> int -> 'a @ m
+  val unsafe_to_array__promise_no_mutation : 'a t @ m -> 'a array
+  val unsafe_of_array__promise_no_mutation : 'a array @ m -> 'a t]
 end = struct
   include Iarray
 
@@ -107,6 +120,11 @@ end = struct
     end)
 
   let[@inline] length t = length (Obj.magic_uncontended t)
+  let%template[@inline] [@mode shared] get t i = get (Obj.magic_uncontended t) i
+
+  let%template[@inline] [@mode shared] unsafe_get t i =
+    unsafe_get (Obj.magic_uncontended t) i
+  ;;
 
   external unsafe_racy_get_contended
     :  'a t @ contended
@@ -115,29 +133,30 @@ end = struct
     @@ portable
     = "%array_unsafe_get"
 
-  let%template[@inline] unsafe_to_array__promise_no_mutation_portable t =
+  let%template[@inline] [@mode shared] unsafe_to_array__promise_no_mutation t =
     unsafe_to_array__promise_no_mutation (Obj.magic_uncontended t)
-  [@@mode m = (uncontended, shared)]
   ;;
 
-  let%template[@inline] unsafe_of_array__promise_no_mutation_portable t =
+  let%template[@inline] [@mode shared] unsafe_of_array__promise_no_mutation t =
     unsafe_of_array__promise_no_mutation (Obj.magic_uncontended t)
-  [@@mode m = (uncontended, shared)]
   ;;
 end
 
 module Vec : sig @@ portable
   type 'a t = 'a Vec.t
 
-  val get : 'a t -> int -> 'a
   val set : 'a t -> int -> 'a -> unit
-  val unsafe_get : 'a t -> int -> 'a
   val unsafe_set : 'a t -> int -> 'a -> unit
   val empty : unit -> 'a t @ portable
   val length : 'a t @ contended -> int
   val create : len:int -> 'a -> 'a t
 
-  val%template copy : 'a t @ m -> 'a t @ m [@@mode m = (uncontended, shared)]
+  [%%template:
+  [@@@mode.default m = (uncontended, shared)]
+
+  val copy : 'a t @ m -> 'a t @ m
+  val get : 'a t @ m -> int -> 'a @ m
+  val unsafe_get : 'a t @ m -> int -> 'a @ m]
 
   val unsafe_racy_get_contended : 'a t @ contended -> int -> 'a @ contended
   val unsafe_racy_set_contended : 'a t @ contended -> int -> 'a -> unit
@@ -158,11 +177,13 @@ end = struct
 
   let[@inline] length t = length (Obj.magic_uncontended t)
   let[@inline] create ~len a = init len ~f:(fun _ -> a)
+  let%template[@inline] [@mode shared] get t i = get (Obj.magic_uncontended t) i
 
-  let%template[@inline] copy t = copy (Obj.magic_uncontended t)
-  [@@mode m = (uncontended, shared)]
+  let%template[@inline] [@mode shared] unsafe_get t i =
+    unsafe_get (Obj.magic_uncontended t) i
   ;;
 
+  let%template[@inline] [@mode shared] copy t = copy (Obj.magic_uncontended t)
   let[@inline] unsafe_racy_get_contended t i = unsafe_get (Obj.magic_uncontended t) i
   let[@inline] unsafe_racy_set_contended t i a = unsafe_set (Obj.magic_uncontended t) i a
 end

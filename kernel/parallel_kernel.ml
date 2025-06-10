@@ -117,10 +117,11 @@ module Scheduler = struct
 
   let[@inline] with_jobs t ~queue ~password f ff = exclave_
     (* [Runqueue.with_jobs] does not raise. *)
-    Unsafe_capsule.access_local__promise_no_exn ~password ~f:(fun [@inline] access ->
-      exclave_
-      let queue = Capsule.Data.Local.unwrap ~access queue in
-      Runqueue.with_jobs queue f ff t)
+    Unsafe_capsule.access_local__promise_no_exn
+      ~password
+      ~f:(fun [@inline] access -> exclave_
+        let queue = Capsule.Data.Local.unwrap ~access queue in
+        Runqueue.with_jobs queue f ff t)
     [@nontail]
   ;;
 end

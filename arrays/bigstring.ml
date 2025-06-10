@@ -1,5 +1,4 @@
 open! Base
-open! Import
 module Bigstring = Base_bigstring
 
 module Kind = struct
@@ -30,10 +29,11 @@ type 'a t =
 
 external length : Bigstring.t @ contended -> int @@ portable = "%caml_ba_dim_1"
 
-let[@inline] with_kind_exn kind data =
+let%template[@inline] with_kind_exn kind data =
   if Bigstring.length data % Kind.width kind <> 0
   then invalid_arg "Bigstring length not divisible by element width.";
   { kind; data }
+[@@mode m = (uncontended, shared)]
 ;;
 
 let[@inline] empty kind =
@@ -53,11 +53,12 @@ let%template[@inline] copy { kind; data } =
 
 let[@inline] length { kind; data } = length data / Kind.width kind
 
-let[@inline] get (type a) { kind : a Kind.t; data } pos : a =
+let%template[@inline] get (type a) ({ kind : a Kind.t; data } @ shared) pos : a =
   let pos = pos * Kind.width kind in
   match kind with
-  | Int8 -> (Bigstring.Int_repr.get_int8 [@inlined]) data ~pos
-  | Int16 -> (Bigstring.Int_repr.get_int16_le [@inlined]) data ~pos
+  | Int8 -> (Bigstring.get_int8 [@inlined]) data ~pos |> Int_repr.Int8.of_base_int_exn
+  | Int16 ->
+    (Bigstring.get_int16_le [@inlined]) data ~pos |> Int_repr.Int16.of_base_int_exn
   | Int32 -> (Bigstring.get_int32_t_le [@inlined]) data ~pos
   | Int64 -> (Bigstring.get_int64_t_le [@inlined]) data ~pos
   | Float32 -> Float32.Bigstring.get data ~pos
@@ -78,8 +79,10 @@ let[@inline] set (type a) { kind : a Kind.t; data } pos (a : a) =
 let[@inline] unsafe_get (type a) { kind : a Kind.t; data } pos : a =
   let pos = pos * Kind.width kind in
   match kind with
-  | Int8 -> (Bigstring.Int_repr.Unsafe.get_int8 [@inlined]) data ~pos
-  | Int16 -> (Bigstring.Int_repr.Unsafe.get_int16_le [@inlined]) data ~pos
+  | Int8 ->
+    (Bigstring.unsafe_get_int8 [@inlined]) data ~pos |> Int_repr.Int8.of_base_int_exn
+  | Int16 ->
+    (Bigstring.unsafe_get_int16_le [@inlined]) data ~pos |> Int_repr.Int16.of_base_int_exn
   | Int32 -> (Bigstring.unsafe_get_int32_t_le [@inlined]) data ~pos
   | Int64 -> (Bigstring.unsafe_get_int64_t_le [@inlined]) data ~pos
   | Float32 -> Float32.Bigstring.unsafe_get data ~pos

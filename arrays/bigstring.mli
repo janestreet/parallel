@@ -27,7 +27,8 @@ type 'a t : value mod portable = private
 
 (** [with_kind_exn (kind : a Kind.t) data] checks that the length of [data] is divisible
     by the width of [a] and returns a typed [a t]. *)
-val with_kind_exn : 'a Kind.t -> Base_bigstring.t -> 'a t
+val%template with_kind_exn : 'a Kind.t -> Base_bigstring.t @ m -> 'a t @ m
+[@@mode m = (uncontended, shared)]
 
 (** [empty kind] is an empty typed bigstring containing [kind]s. *)
 val empty : 'a Kind.t -> 'a t
@@ -51,7 +52,7 @@ val%template copy : 'a t @ m -> 'a t @ m
 (** [get t i] loads the scalar at index [i].
 
     Raises [Invalid_argument] if [i] is out of bounds. *)
-val get : 'a t -> int -> 'a @ portable
+val get : 'a t @ shared -> int -> 'a @ portable
 
 (** [set t i a] stores the scalar [a] to index [i].
 
@@ -59,7 +60,7 @@ val get : 'a t -> int -> 'a @ portable
 val set : 'a t -> int -> 'a @ portable -> unit
 
 (** [unsafe_get t i] loads the scalar at index [i]. Does not check bounds. *)
-val unsafe_get : 'a t -> int -> 'a @ portable
+val unsafe_get : 'a t @ shared -> int -> 'a @ portable
 
 (** [unsafe_set t i a] stores the scalar [a] to index [i]. Does not check bounds. *)
 val unsafe_set : 'a t -> int -> 'a @ portable -> unit

@@ -270,8 +270,7 @@ let[@inline] with_jobs
      is able to better optimize [apply rest] than a hypothetical [apply node]. *)
   let rest = (Obj.magic_many [@mode contended portable aliased]) rest in
   let node = node ~jobs:rest in
-  Stack_pointer.unsafe_with_value node ~f:(fun [@inline] new_head ->
-    exclave_
+  Stack_pointer.unsafe_with_value node ~f:(fun [@inline] new_head -> exclave_
     let old_head = push_head t ~new_head in
     let first = Thunk.apply first parallel in
     pop_head t ~old_head;

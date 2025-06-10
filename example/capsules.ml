@@ -7,8 +7,8 @@ let fork_join parallel =
   let ref = Capsule.Data.create (fun () -> ref 0) in
   Parallel.fork_join2
     parallel
-    (fun _ -> (ref : _ @@ uncontended))
-    (fun _ -> (ref : _ @@ uncontended))
+    (fun _ -> (ref : _ @ uncontended))
+    (fun _ -> (ref : _ @ uncontended))
 ;;
 
 let increment ~(access : 'k Capsule.Access.t) ref =

@@ -248,8 +248,7 @@ module Result = struct
   let[@inline] handle_panics_and_report_exceptions monitor f = exclave_
     let (P key) = Capsule.create () in
     let result, key =
-      Capsule.Key.access_local key ~f:(fun [@inline] access ->
-        exclave_
+      Capsule.Key.access_local key ~f:(fun [@inline] access -> exclave_
         let res =
           try Ok_or_exn.Ok (Capsule.Data.wrap ~access (f ())) with
           | exn -> Exn (Capsule.Data.wrap ~access exn)

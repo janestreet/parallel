@@ -985,10 +985,10 @@ module Array = struct
     @@ portable
     = "%identity"
 
-  let[@inline] freeze mut = mut]
+  let[@inline] freeze mut = mut
+  let[@inline] get t i = ((get [@mode m]) t i).portable
+  let[@inline] unsafe_get t i = ((unsafe_get [@mode m]) t i).portable]
 
-  let[@inline] get t i = (get t i).portable
-  let[@inline] unsafe_get t i = (unsafe_get t i).portable
   let[@inline] set t i a = set t i { portable = a }
   let[@inline] unsafe_set t i a = unsafe_set t i { portable = a }
   let[@inline] set' t i f = set t i (f ())
@@ -1035,13 +1035,13 @@ module Iarray = struct
   let unwrap = (Array.unwrap [@mode m])
 
   let[@inline] copy t =
-    (unsafe_to_array__promise_no_mutation_portable [@mode m]) t |> (Array.copy [@mode m])
+    (unsafe_to_array__promise_no_mutation [@mode m]) t |> (Array.copy [@mode m])
   ;;
 
-  let freeze = (unsafe_of_array__promise_no_mutation_portable [@mode m])]
+  let freeze = (unsafe_of_array__promise_no_mutation [@mode m])
+  let[@inline] get t i = ((get [@mode m]) t i).portable
+  let[@inline] unsafe_get t i = ((unsafe_get [@mode m]) t i).portable]
 
-  let[@inline] get t i = (get t i).portable
-  let[@inline] unsafe_get t i = (unsafe_get t i).portable
   let[@inline] to_length init = init
   let[@inline] create_for_init n a = Array.create ~len:n { portable = a }
   let[@inline] create_for_map t a = Array.create ~len:(length t) { portable = a }
@@ -1096,10 +1096,10 @@ module Vec = struct
     @@ portable
     = "%identity"
 
-  let[@inline] freeze mut = mut]
+  let[@inline] freeze mut = mut
+  let[@inline] get t i = ((get [@mode m]) t i).portable
+  let[@inline] unsafe_get t i = ((unsafe_get [@mode m]) t i).portable]
 
-  let[@inline] get t i = (get t i).portable
-  let[@inline] unsafe_get t i = (unsafe_get t i).portable
   let[@inline] set t i a = set t i { portable = a }
   let[@inline] unsafe_set t i a = unsafe_set t i { portable = a }
   let[@inline] set' t i f = set t i (f ())
@@ -1147,7 +1147,9 @@ module Bigstring = struct
     @@ portable
     = "%identity"
 
-  let freeze t = t]
+  let freeze t = t
+  let get = get
+  let unsafe_get = unsafe_get]
 
   let set' t i f = set t i (f ())
   let unsafe_set' t i f = unsafe_set t i (f ())

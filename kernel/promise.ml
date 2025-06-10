@@ -51,8 +51,7 @@ let[@inline] [@loop always] rec continue
   =
   fun a ~key ~cont ->
   let result, key =
-    Capsule.Key.access_local key ~f:(fun [@inline] access ->
-      exclave_
+    Capsule.Key.access_local key ~f:(fun [@inline] access -> exclave_
       let cont = Capsule.Data.unwrap_unique ~access cont in
       let res =
         match Effect.continue cont { portable = a } [] with

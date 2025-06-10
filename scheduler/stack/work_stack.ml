@@ -33,7 +33,7 @@ let create () =
   P { mutex; cond; stack }
 ;;
 
-let push (P { mutex; cond; stack; _ }) ~(f : unit -> unit @@ once portable) =
+let push (P { mutex; cond; stack; _ }) ~(f : (unit -> unit) @ once portable) =
   Capsule.Mutex.with_lock mutex ~f:(fun password ->
     Capsule.Data.iter stack ~password ~f:(fun stack ->
       Once_stack.push stack { portable = f });
