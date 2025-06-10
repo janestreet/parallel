@@ -1,4 +1,9 @@
 #include <caml/mlvalues.h>
+#include <caml/fail.h>
+
+CAMLprim value parallel_fatal_error(const char *message) {
+  caml_fatal_error("%s", message);
+}
 
 #ifdef CAML_RUNTIME_5
 
@@ -30,10 +35,18 @@ static void *heartbeat_thread(void *interval_us) {
 
   while (true) {
     struct timespec remain = {0};
+
+#ifdef __APPLE__
+    int err = nanosleep(&interval, &remain);
+    while (err == EINTR) {
+      err = nanosleep(&remain, &remain);
+    }
+#else
     int err = clock_nanosleep(CLOCK_MONOTONIC, 0, &interval, &remain);
     while (err == EINTR) {
       err = clock_nanosleep(CLOCK_MONOTONIC, 0, &remain, &remain);
     }
+#endif
 
     if (err) {
       caml_fatal_error("Heartbeat thread failed to sleep: %d\n", err);

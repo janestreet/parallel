@@ -14,9 +14,15 @@ let raw_backtrace_to_lines backtrace =
   Backtrace.to_string backtrace |> String.strip |> String.split_lines
 ;;
 
-external caml_fatal_error : string -> 'a @ portable @@ portable = "caml_fatal_error"
+external parallel_fatal_error
+  :  string
+  -> 'a @ portable
+  @@ portable
+  = "parallel_fatal_error"
 
-let abort_nested_panic () = caml_fatal_error "Panicked in on_panic, terminating program."
+let abort_nested_panic () =
+  parallel_fatal_error "Panicked in on_panic, terminating program."
+;;
 
 module Incident = struct
   module Id : sig @@ portable
