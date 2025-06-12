@@ -4,6 +4,7 @@ type ('a, 'b) t =
   #{ a : 'a or_null @@ contended portable
    ; b : 'b or_null @@ contended portable
    }
+[@@warning "-69"]
 
 let[@inline] none () = #{ a = Null; b = Null }
 let[@inline] some a b = #{ a = This a; b = This b }
