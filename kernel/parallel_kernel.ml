@@ -1,14 +1,55 @@
 open! Base
 open! Import
 module Hlist = Hlist
-module Panic = Panic
 module Pair_or_null = Pair_or_null
-module Monitor = Panic.Monitor
+include Parallel_kernel1
 
 module For_scheduler = struct
-  module Ivar = Ivar
+  module Result = Result
 
-  let root ~monitor ~promote ~wake ~f = Scheduler.root #{ monitor; promote; wake } ~f
+  external acquire : unit -> unit @@ portable = "parallel_acquire_heartbeat"
+  external release : unit -> unit @@ portable = "parallel_release_heartbeat"
+
+  let[@inline] with_heartbeat f =
+    acquire ();
+    Exn.protect ~f ~finally:release
+  ;;
+
+  external setup_heartbeat
+    :  interval_us:int
+    -> key:Runqueue.t Stack_pointer.Imm.t Dynamic.t
+    -> callback:(Runqueue.t Stack_pointer.Imm.t @ local -> unit)
+    -> unit
+    = "parallel_setup_heartbeat"
+
+  let callback queue =
+    let queue = Stack_pointer.Imm.to_ptr queue in
+    Stack_pointer.use queue ~f:(function [@inline]
+      | None -> ()
+      | Some queue -> Runqueue.promote queue ~add_tokens:Env.heartbeat_promotions)
+      [@nontail]
+  ;;
+
+  let () =
+    setup_heartbeat ~interval_us:Env.heartbeat_interval_us ~key:Dynamic.key ~callback
+  ;;
+
+  let root f ~promote ~wake =
+    let (P key) = Capsule.create () in
+    Promise.fiber
+      (Promise.start ())
+      (fun parallel ->
+        f parallel;
+        exclave_ Ok (Capsule.Data.inject (), key))
+      ~scheduler:#{ promote; wake }
+      ~tokens:0
+  ;;
+
+  let[@inline] await parallel trigger =
+    Parallel_kernel0.Wait.Contended.perform
+      (Parallel_kernel1.handler_exn parallel)
+      (Trigger trigger) [@nontail]
+  ;;
 end
 
 module For_testing = struct
@@ -18,127 +59,91 @@ module For_testing = struct
   end
 end
 
-exception Panic = Panic.Panic
-
-include Parallel_kernel1
-
-let panic t incident =
-  Panic.Monitor.panic (monitor t) incident;
-  raise (Panic (Panic.of_incident incident))
-;;
-
-let[@inline] [@loop always] [@tail_mod_cons] rec unwrap_panics
-  : type l. l Hlist.Gen(Panic.Result).t @ contended local portable -> Panic.t list
+let[@inline] [@loop] [@unroll] [@tail_mod_cons] rec unwrap
+  : type l. l Hlist.Gen(Result).t @ local -> l Hlist.t
   = function
   | [] -> []
-  | Ok _ :: pp -> unwrap_panics pp
-  | Panic p :: pp -> p :: unwrap_panics pp
+  | a :: aa -> Result.ok_exn a :: unwrap aa
 ;;
 
-let[@inline never] repanic panics =
-  let panics = unwrap_panics panics in
-  raise (Panic (Panic.join panics))
+let[@inline] unwrap_encapsulated (first : _ Result.t) rest : _ Hlist.t =
+  let[@inline] [@loop] [@unroll] [@tail_mod_cons] rec unwrap_tail
+    : type l. l Hlist.Gen(Result.Capsule).t @ contended local unique -> l Hlist.t
+    = function
+    | [] -> []
+    | a :: aa -> Result.Capsule.unwrap_ok_exn a :: unwrap_tail aa
+  in
+  Result.ok_exn first :: unwrap_tail rest
 ;;
-
-let[@inline] uncapsulate a key = Capsule.Data.unwrap ~access:(Capsule.Key.destroy key) a
 
 module Scheduler = struct
   module type S = Parallel_scheduler_intf.S with type parallel := t
-  module type S_async = Parallel_scheduler_intf.S_async with type parallel := t
+  module type S_concurrent = Parallel_scheduler_intf.S_concurrent with type parallel := t
 
   module Sequential = struct
     type t = { mutable stopped : bool }
 
-    let create () = { stopped = false }
+    let create ?max_domains:_ () = { stopped = false }
+    let is_stopped t = t.stopped
 
     let stop t =
       if t.stopped then failwith "The scheduler is already stopped";
       t.stopped <- true
     ;;
 
-    let schedule t ~monitor ~f =
+    let parallel t ~f =
       if t.stopped then failwith "The scheduler is already stopped";
-      match
-        Panic.Result.handle_panics_and_report_exceptions monitor (fun () ->
-          f (create_sequential monitor) [@nontail])
-      with
-      | Ok (a, key) -> uncapsulate a key
-      | Panic panic -> raise (Panic panic)
+      f Sequential
     ;;
   end
 
-  let[@inline] heartbeats () = Atomic.get heartbeat_counter
+  let[@inline] use_tokens ~queue ~password =
+    Capsule.Data.Local.iter queue ~password ~f:(fun [@inline] (queue : Runqueue.t) ->
+      if queue.tokens > 0 then Runqueue.promote queue ~add_tokens:0)
+    [@nontail]
+  ;;
 
-  let[@inline] check_heartbeat = function
-    | Sequential _ -> ()
-    | Parallel { monitor; password; queue; _ } ->
-      (* May call the scheduler-provided [promote] and [wake] functions,
-         which are not allowed to raise. *)
-      Unsafe_capsule.Data.iter_local__promise_no_exn
-        queue
-        ~password
-        ~f:(fun [@inline] queue ->
-          if queue.heartbeats < Atomic.get heartbeat_counter
-          then
-            Scheduler.promote
-              #{ monitor; promote = queue.promote; wake = queue.wake }
-              ~queue)
+  let[@inline] has_tokens = function
+    | Sequential -> false
+    | Parallel { queue; password; _ } ->
+      Capsule.Data.Local.extract queue ~password ~f:(fun [@inline] (queue : Runqueue.t) ->
+        queue.tokens > 0)
       [@nontail]
   ;;
 
-  let[@inline never] eager_fork_join t ~continue ~fork ~join =
-    (* This always tail-calls either continue or join. Threading [t] through the various
-       functions means the global closures don't capture any values, so won't be allocated. *)
+  let[@inline] heartbeat t ~n =
     match t with
-    | Sequential _ -> continue t [@tail]
-    | Parallel { monitor; password; queue; _ } ->
-      (match%optional_u.Pair_or_null fork t with
-       | None -> continue t [@tail]
-       | Some ff ->
-         let #(f1, f2) = ff in
-         let promote, wake =
-           Unsafe_capsule.Data.extract__promise_no_exn queue ~password ~f:(fun queue ->
-             queue.promote, queue.wake)
-         in
-         let one_job = Scheduler.promote_one #{ monitor; promote; wake } ~f:f2 in
-         let a = Thunk.apply f1 t in
-         let b = Scheduler.One_job.await one_job t in
-         (match a, b with
-          | Ok (a, keya), Ok (b, keyb) ->
-            join t (uncapsulate a keya) (uncapsulate b keyb) [@tail]
-          | a, b -> repanic [ a; b ] [@nontail]))
-  ;;
-
-  let[@inline] on_heartbeat t ~n ~continue ~fork ~join =
-    if Atomic.get heartbeat_counter >= n
-    then eager_fork_join t ~continue ~fork ~join
-    else continue t
+    | Sequential -> ()
+    | Parallel { queue; password; _ } ->
+      Capsule.Data.Local.iter queue ~password ~f:(fun [@inline] (queue : Runqueue.t) ->
+        Runqueue.promote queue ~add_tokens:n)
+      [@nontail]
   ;;
 
   let[@inline] with_jobs t ~queue ~password f ff = exclave_
-    (* [Runqueue.with_jobs] does not raise. *)
-    Unsafe_capsule.access_local__promise_no_exn
-      ~password
-      ~f:(fun [@inline] access -> exclave_
-        let queue = Capsule.Data.Local.unwrap ~access queue in
-        Runqueue.with_jobs queue f ff t)
-    [@nontail]
+    let (P current) = Capsule.current () in
+    let f = Capsule.Data.Local.wrap_once ~access:current f in
+    let { contended = { unyielding = first, rest } } =
+      Capsule.Password.with_current current (fun [@inline] current -> exclave_
+        let[@inline] f (t : t) =
+          Capsule.access ~password:current ~f:(fun [@inline] access ->
+            let f = Capsule.Data.Local.unwrap_once ~access f in
+            Capsule.Data.wrap ~access (f t))
+          [@nontail]
+        in
+        { contended =
+            Capsule.access_local ~password ~f:(fun [@inline] access -> exclave_
+              let queue = Capsule.Data.Local.unwrap ~access queue in
+              { unyielding = Runqueue.with_jobs queue f ff t })
+        })
+    in
+    #(Result.map ~f:(Capsule.Data.unwrap ~access:current) first, { contended = rest })
   ;;
 end
 
-let[@inline] [@loop always] [@tail_mod_cons] rec unwrap
-  : type l. l Hlist.Gen(Panic.Result).t @ contended local portable unique -> l Hlist.t
-  = function
-  | [] -> []
-  | Ok (a, key) :: aa -> uncapsulate a key :: unwrap aa
-  | Panic _ :: _ as l -> (repanic [@tailcall false]) l
-;;
-
 let[@inline never] fork_join_seq t ff =
-  let[@inline] [@loop always] rec aux
-    : type l.
-      l Hlist.Gen(Thunk).t @ local once portable
-      -> l Hlist.Gen(Panic.Result).t @ local portable unique
+  let[@inline] [@loop] rec aux
+    : type l. l Hlist.Gen(Thunk).t @ local once -> l Hlist.Gen(Result).t @ local unique
     = function
     | [] -> []
     | f :: ff ->
@@ -151,54 +156,50 @@ let[@inline never] fork_join_seq t ff =
 
 let[@inline] fork_join (type l) t (ff : l Hlist.Gen(Thunk).t) : l Hlist.t =
   match t with
-  | Sequential _ -> fork_join_seq t ff
-  | Parallel { password; queue; _ } ->
-    Scheduler.check_heartbeat t;
+  | Sequential -> fork_join_seq t ff
+  | Parallel { queue; password; _ } ->
+    Scheduler.use_tokens ~queue ~password;
     (match ff with
      | [] -> []
      | [ f ] -> unwrap [ Thunk.apply f t ] [@nontail]
      | f :: (_ :: _ as ff) ->
-       let first, rest = Scheduler.with_jobs t ~queue ~password f ff in
-       unwrap (first :: rest) [@nontail])
+       let #(first, rest) = Scheduler.with_jobs t ~queue ~password f ff in
+       unwrap_encapsulated first rest.contended [@nontail])
 ;;
 
 let[@inline never] fork_join2_seq t f1 f2 =
   let a = Thunk.apply f1 t in
   let b = Thunk.apply f2 t in
-  match a, b with
-  | Ok (a, keya), Ok (b, keyb) -> uncapsulate a keya, uncapsulate b keyb
-  | a, b -> repanic [ a; b ] [@nontail]
+  let [ a; b ] = unwrap [ a; b ] in
+  #(a, b)
 ;;
 
-let[@inline] fork_join2 t f1 f2 =
+let[@inline] fork_join2 t (f1 @ local nonportable once) f2 =
   match t with
-  | Sequential _ -> fork_join2_seq t f1 f2
-  | Parallel { password; queue; _ } ->
-    Scheduler.check_heartbeat t;
-    (match Scheduler.with_jobs t ~queue ~password f1 [ f2 ] with
-     | Ok (a, keya), [ Ok (b, keyb) ] -> uncapsulate a keya, uncapsulate b keyb
-     | a, b -> repanic (a :: b) [@nontail])
+  | Sequential -> fork_join2_seq t f1 f2
+  | Parallel { queue; password; _ } ->
+    Scheduler.use_tokens ~queue ~password;
+    let #(first, rest) = Scheduler.with_jobs t ~queue ~password f1 [ f2 ] in
+    let [ a; b ] = unwrap_encapsulated first rest.contended in
+    #(a, b)
 ;;
 
 let[@inline never] fork_join3_seq t f1 f2 f3 =
   let a = Thunk.apply f1 t in
   let b = Thunk.apply f2 t in
   let c = Thunk.apply f3 t in
-  match a, b, c with
-  | Ok (a, keya), Ok (b, keyb), Ok (c, keyc) ->
-    uncapsulate a keya, uncapsulate b keyb, uncapsulate c keyc
-  | a, b, c -> repanic [ a; b; c ] [@nontail]
+  let [ a; b; c ] = unwrap [ a; b; c ] in
+  #(a, b, c)
 ;;
 
 let[@inline] fork_join3 t f1 f2 f3 =
   match t with
-  | Sequential _ -> fork_join3_seq t f1 f2 f3
-  | Parallel { password; queue; _ } ->
-    Scheduler.check_heartbeat t;
-    (match Scheduler.with_jobs t ~queue ~password f1 [ f2; f3 ] with
-     | Ok (a, keya), [ Ok (b, keyb); Ok (c, keyc) ] ->
-       uncapsulate a keya, uncapsulate b keyb, uncapsulate c keyc
-     | a, bc -> repanic (a :: bc) [@nontail])
+  | Sequential -> fork_join3_seq t f1 f2 f3
+  | Parallel { queue; password; _ } ->
+    Scheduler.use_tokens ~queue ~password;
+    let #(first, rest) = Scheduler.with_jobs t ~queue ~password f1 [ f2; f3 ] in
+    let [ a; b; c ] = unwrap_encapsulated first rest.contended in
+    #(a, b, c)
 ;;
 
 let[@inline never] fork_join4_seq t f1 f2 f3 f4 =
@@ -206,21 +207,18 @@ let[@inline never] fork_join4_seq t f1 f2 f3 f4 =
   let b = Thunk.apply f2 t in
   let c = Thunk.apply f3 t in
   let d = Thunk.apply f4 t in
-  match a, b, c, d with
-  | Ok (a, keya), Ok (b, keyb), Ok (c, keyc), Ok (d, keyd) ->
-    uncapsulate a keya, uncapsulate b keyb, uncapsulate c keyc, uncapsulate d keyd
-  | a, b, c, d -> repanic [ a; b; c; d ] [@nontail]
+  let [ a; b; c; d ] = unwrap [ a; b; c; d ] in
+  #(a, b, c, d)
 ;;
 
 let[@inline] fork_join4 t f1 f2 f3 f4 =
   match t with
-  | Sequential _ -> fork_join4_seq t f1 f2 f3 f4
-  | Parallel { password; queue; _ } ->
-    Scheduler.check_heartbeat t;
-    (match Scheduler.with_jobs t ~queue ~password f1 [ f2; f3; f4 ] with
-     | Ok (a, keya), [ Ok (b, keyb); Ok (c, keyc); Ok (d, keyd) ] ->
-       uncapsulate a keya, uncapsulate b keyb, uncapsulate c keyc, uncapsulate d keyd
-     | a, bcd -> repanic (a :: bcd) [@nontail])
+  | Sequential -> fork_join4_seq t f1 f2 f3 f4
+  | Parallel { queue; password; _ } ->
+    Scheduler.use_tokens ~queue ~password;
+    let #(first, rest) = Scheduler.with_jobs t ~queue ~password f1 [ f2; f3; f4 ] in
+    let [ a; b; c; d ] = unwrap_encapsulated first rest.contended in
+    #(a, b, c, d)
 ;;
 
 let[@inline never] fork_join5_seq t f1 f2 f3 f4 f5 =
@@ -229,46 +227,48 @@ let[@inline never] fork_join5_seq t f1 f2 f3 f4 f5 =
   let c = Thunk.apply f3 t in
   let d = Thunk.apply f4 t in
   let e = Thunk.apply f5 t in
-  match a, b, c, d, e with
-  | Ok (a, keya), Ok (b, keyb), Ok (c, keyc), Ok (d, keyd), Ok (e, keye) ->
-    ( uncapsulate a keya
-    , uncapsulate b keyb
-    , uncapsulate c keyc
-    , uncapsulate d keyd
-    , uncapsulate e keye )
-  | a, b, c, d, e -> repanic [ a; b; c; d; e ] [@nontail]
+  let [ a; b; c; d; e ] = unwrap [ a; b; c; d; e ] in
+  #(a, b, c, d, e)
 ;;
 
 let[@inline] fork_join5 t f1 f2 f3 f4 f5 =
   match t with
-  | Sequential _ -> fork_join5_seq t f1 f2 f3 f4 f5
-  | Parallel { password; queue; _ } ->
-    Scheduler.check_heartbeat t;
-    (match Scheduler.with_jobs t ~queue ~password f1 [ f2; f3; f4; f5 ] with
-     | Ok (a, keya), [ Ok (b, keyb); Ok (c, keyc); Ok (d, keyd); Ok (e, keye) ] ->
-       ( uncapsulate a keya
-       , uncapsulate b keyb
-       , uncapsulate c keyc
-       , uncapsulate d keyd
-       , uncapsulate e keye )
-     | a, bcde -> repanic (a :: bcde) [@nontail])
+  | Sequential -> fork_join5_seq t f1 f2 f3 f4 f5
+  | Parallel { queue; password; _ } ->
+    Scheduler.use_tokens ~queue ~password;
+    let #(first, rest) = Scheduler.with_jobs t ~queue ~password f1 [ f2; f3; f4; f5 ] in
+    let [ a; b; c; d; e ] = unwrap_encapsulated first rest.contended in
+    #(a, b, c, d, e)
+;;
+
+(* This always tail-calls either continue or join. Threading [t] through the various
+   functions means the global closures don't capture any values, so won't be allocated. *)
+let[@inline] fork_on_heartbeat t ~continue ~fork ~join =
+  let[@inline never] fork_join t ~continue ~fork ~join =
+    match%optional_u.Pair_or_null fork t with
+    | Some ff ->
+      let #(f1, f2) = ff in
+      let #(a, b) = fork_join2 t f1 f2.portable in
+      join t a b
+    | None -> continue t
+  in
+  if Scheduler.has_tokens t then fork_join t ~continue ~fork ~join else continue t
 ;;
 
 (* Implemented as a separate function from [fold] for speed. *)
 let[@inline] for_ ?(grain = 1) t ~start ~stop ~f =
-  let[@inline] [@loop always] rec aux t ~hb ~start ~stop =
+  let[@inline] [@loop] rec aux t ~start ~stop =
     if start >= stop
     then ()
     else
-      Scheduler.on_heartbeat
+      fork_on_heartbeat
         t
-        ~n:hb
         ~continue:(fun [@inline] t ->
           let chunk = Int.min (start + grain) stop in
           for i = start to chunk - 1 do
             f t i
           done;
-          aux t ~hb ~start:chunk ~stop)
+          aux t ~start:chunk ~stop)
         ~fork:(fun _ ->
           let chunk = (stop - start) / 2 in
           let pivot = start + chunk in
@@ -276,72 +276,61 @@ let[@inline] for_ ?(grain = 1) t ~start ~stop ~f =
           then Pair_or_null.none ()
           else
             Pair_or_null.some
-              (fun t ->
-                let hb = Scheduler.heartbeats () + 1 in
-                aux t ~hb ~start ~stop:pivot)
-              (fun t ->
-                let hb = Scheduler.heartbeats () + 1 in
-                aux t ~hb ~start:pivot ~stop))
+              (fun t -> aux t ~start ~stop:pivot)
+              { portable = (fun t -> aux t ~start:pivot ~stop) })
         ~join:(fun _ () () -> ())
   in
   if grain < 1 then invalid_arg "grain < 1";
-  let hb = Scheduler.heartbeats () + 1 in
-  match
-    Panic.Result.handle_panics_and_report_exceptions (monitor t) (fun [@inline] () ->
-      aux t ~hb ~start ~stop)
-  with
-  | Ok _ -> ()
-  | panic -> repanic [ panic ] [@nontail]
+  aux t ~start ~stop
 ;;
 
-let[@inline] fold ?(grain = 1) t ~init:#(zero, state) ~next ~fork ~join =
+let[@inline] fold
+  : ('acc : value mod portable unyielding)
+    ('seq : value mod contended portable unyielding) 'ret.
+  ?grain:int
+  -> t @ local
+  -> init:(unit -> 'acc) @ portable unyielding
+  -> state:'seq
+  -> next:(t @ local -> 'acc -> 'seq -> ('acc, 'seq) Pair_or_null.t) @ portable unyielding
+  -> stop:(t @ local -> 'acc -> 'ret) @ portable unyielding
+  -> fork:(t @ local -> 'seq -> ('seq, 'seq) Pair_or_null.t) @ portable unyielding
+  -> join:(t @ local -> 'ret -> 'ret -> 'ret) @ portable unyielding
+  -> 'ret
+  =
+  fun ?(grain = 1) t ~init ~state ~next ~stop ~fork ~join ->
   let open struct
-    type stop =
+    type yield =
       | Yield
       | Done
   end in
-  let zero = { portended = zero } in
-  let state = { portended = state } in
-  let[@inline] [@loop always] rec seq t ~n ~state ~acc =
+  let[@inline] [@loop] rec seq t ~n ~state ~acc =
     if n = 0
     then #(Yield, state, acc)
     else (
-      match%optional_u.Pair_or_null next t acc.portended state.portended with
+      match%optional_u.Pair_or_null next t acc state with
       | None -> #(Done, state, acc)
       | Some acc_state ->
         let #(acc, state) = acc_state in
-        seq t ~n:(n - 1) ~state:{ portended = state } ~acc:{ portended = acc } [@tail])
+        seq t ~n:(n - 1) ~state ~acc)
   in
-  let[@inline] [@loop always] rec aux t ~hb ~state ~acc =
-    Scheduler.on_heartbeat
+  let[@inline] [@loop] rec aux t ~state ~acc =
+    fork_on_heartbeat
       t
-      ~n:hb
       ~continue:(fun [@inline] t ->
-        let #(stop, state, acc) = seq t ~n:grain ~state ~acc in
-        match stop with
-        | Yield -> aux t ~hb ~state ~acc [@tail]
-        | Done -> acc)
+        let #(yield, state, acc) = seq t ~n:grain ~state ~acc in
+        match yield with
+        | Yield -> aux t ~state ~acc
+        | Done -> stop t acc)
       ~fork:(fun t ->
-        match%optional_u.Pair_or_null fork t state.portended with
+        match%optional_u.Pair_or_null fork t state with
         | None -> Pair_or_null.none ()
         | Some s ->
           let #(s0, s1) = s in
           Pair_or_null.some
-            (fun t ->
-              let hb = Scheduler.heartbeats () + 1 in
-              aux t ~hb ~state:{ portended = s0 } ~acc [@tail])
-            (fun t ->
-              let hb = Scheduler.heartbeats () + 1 in
-              aux t ~hb ~state:{ portended = s1 } ~acc:zero [@tail]))
-      ~join:(fun [@inline] t s0 s1 -> { portended = join t s0.portended s1.portended })
-    [@tail]
+            (fun t -> aux t ~state:s0 ~acc)
+            { portable = (fun t -> aux t ~state:s1 ~acc:(init ())) })
+      ~join
   in
   if grain < 1 then invalid_arg "grain < 1";
-  let hb = Scheduler.heartbeats () + 1 in
-  match
-    Panic.Result.handle_panics_and_report_exceptions (monitor t) (fun [@inline] () ->
-      aux t ~hb ~acc:zero ~state)
-  with
-  | Ok (acc, key) -> (uncapsulate acc key).portended
-  | panic -> repanic [ panic ] [@nontail]
+  aux t ~acc:(init ()) ~state
 ;;

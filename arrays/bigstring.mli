@@ -19,7 +19,7 @@ module Kind : sig
 end
 
 (** Typed bigstring representing an array of scalars. *)
-type 'a t : value mod portable = private
+type 'a t = private
   { kind : 'a Kind.t
   ; data : Base_bigstring.t
   }
@@ -41,6 +41,11 @@ val kind : 'a t @ contended -> 'a Kind.t
 
 (** [data t] is the underlying bigstring for [t]. *)
 val data : 'a t -> Base_bigstring.t
+
+(** [sub_shared t ~pos ~len] is a bigstring containing [len] elements of [t] beginning
+    with the element at index [pos], pointing to the same memory as the input bigstring. *)
+val%template sub_shared : 'a t @ m -> pos:int -> len:int -> 'a t @ m
+[@@mode m = (uncontended, shared, contended)]
 
 (** [length t] is the length of [t] in scalars. *)
 val length : 'a t @ contended -> int

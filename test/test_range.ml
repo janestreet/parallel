@@ -1,9 +1,8 @@
 open! Base
 open! Import
 
-module Test_scheduler (Scheduler : Common.Scheduler) = struct
-  let monitor = Parallel.Monitor.create_root ()
-  let scheduler = Scheduler.configure (Scheduler.create [@alert "-experimental"]) ()
+module Test_scheduler (Scheduler : Parallel.Scheduler.S) = struct
+  let scheduler = (Scheduler.create [@alert "-experimental"]) ()
 
   module Test_intf (Seq : Parallel.Sequence.S) = struct
     (* Adapted from base/test/test_sequence.ml *)
@@ -17,7 +16,7 @@ module Test_scheduler (Scheduler : Common.Scheduler) = struct
       ;;
 
       let test stride (start_n, start) (stop_n, stop) result =
-        Scheduler.schedule scheduler ~monitor ~f:(fun parallel ->
+        Scheduler.parallel scheduler ~f:(fun parallel ->
           basic parallel ~stride ~start ~stop ~start_n ~stop_n ~result
           && (* works for negative [start] and [stop] *)
           basic

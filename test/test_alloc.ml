@@ -1,11 +1,20 @@
 open! Base
 open! Import
 
-let%expect_test "monitor doesn't allocate" =
-  let monitor = Parallel.Monitor.create_root () in
+let%expect_test "result doesn't allocate" =
   (match
      Expect_test_helpers_core.require_no_allocation_local (fun () -> exclave_
-       Parallel.Panic.Result.handle_panics_and_report_exceptions monitor (fun () -> 1))
+       Parallel.For_scheduler.Result.try_with (fun () -> 1))
+   with
+   | Ok n -> assert (n = 1)
+   | _ -> assert false);
+  [%expect {| |}]
+;;
+
+let%expect_test "capsule doesn't allocate" =
+  (match
+     Expect_test_helpers_core.require_no_allocation_local (fun () -> exclave_
+       Parallel.For_scheduler.Result.Capsule.try_with (fun () -> 1))
    with
    | Ok (n, _) -> assert (Capsule.Data.project n = 1)
    | _ -> assert false);
@@ -13,11 +22,10 @@ let%expect_test "monitor doesn't allocate" =
 ;;
 
 let%expect_test ("sequential scheduler doesn't allocate" [@tags "fast-flambda"]) =
-  let monitor = Parallel.Monitor.create_root () in
   let scheduler = Parallel.Scheduler.Sequential.create () in
   Expect_test_helpers_core.require_no_allocation_local (fun () ->
-    Parallel.Scheduler.Sequential.schedule scheduler ~monitor ~f:(fun parallel ->
-      let x, y = Parallel.fork_join2 parallel (fun _ -> 1) (fun _ -> 1) in
+    Parallel.Scheduler.Sequential.parallel scheduler ~f:(fun parallel ->
+      let #(x, y) = Parallel.fork_join2 parallel (fun _ -> 1) (fun _ -> 1) in
       assert (x + y = 2)));
   [%expect {| |}]
 ;;

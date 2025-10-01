@@ -1,4 +1,5 @@
 open! Base
+open! Import
 module Bigstring = Base_bigstring
 
 module Kind = struct
@@ -46,6 +47,14 @@ let[@inline] create kind n = { kind; data = Bigstring.create (n * Kind.width kin
 let[@inline] kind { kind; _ } = kind
 let[@inline] data { data; _ } = data
 
+let%template sub_shared (type a) ({ kind; data } : a t) ~pos ~len =
+  let width = Kind.width kind in
+  let len = width * len in
+  let pos = width * pos in
+  { data = Stdlib.Bigarray.Array1.sub (Obj.magic_uncontended data) pos len; kind }
+[@@mode m = (uncontended, shared, contended)]
+;;
+
 let%template[@inline] copy { kind; data } =
   { kind; data = Bigstring.copy (Obj.magic_uncontended data) }
 [@@mode m = (uncontended, shared)]
@@ -53,7 +62,7 @@ let%template[@inline] copy { kind; data } =
 
 let[@inline] length { kind; data } = length data / Kind.width kind
 
-let%template[@inline] get (type a) ({ kind : a Kind.t; data } @ shared) pos : a =
+let%template[@inline] get (type a) { kind : a Kind.t; data } pos : a =
   let pos = pos * Kind.width kind in
   match kind with
   | Int8 -> (Bigstring.get_int8 [@inlined]) data ~pos |> Int_repr.Int8.of_base_int_exn

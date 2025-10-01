@@ -2,44 +2,61 @@ open! Base
 open! Import
 include Parallel_kernel0.Parallel
 
-external heartbeat_counter
-  :  unit
-  -> int Atomic.t
-  @@ portable
-  = "parallel_heartbeat_counter"
+module Dynamic = struct
+  type 'a t : immutable_data
 
-external start_heartbeating
-  :  interval_us:int
-  -> unit
-  @@ portable
-  = "parallel_start_heartbeating"
+  external create
+    :  Parallel_kernel0.Runqueue.t Stack_pointer.Imm.t
+    -> Parallel_kernel0.Runqueue.t Stack_pointer.Imm.t t
+    @@ portable
+    = "parallel_create_dynamic"
 
-let heartbeat_counter = heartbeat_counter ()
-let[@inline] create_sequential monitor = exclave_ Sequential monitor
+  external unsafe_set_fiber
+    :  Parallel_kernel0.Runqueue.t Stack_pointer.Imm.t t
+    -> Parallel_kernel0.Runqueue.t Stack_pointer.Imm.t
+    -> unit
+    @@ portable
+    = "parallel_unsafe_set_dynamic"
 
-let[@inline] create_parallel
-  ~(scheduler : Parallel_kernel0.Scheduler.t)
-  ~password
-  ~handler
-  = exclave_
-  let heartbeats = Atomic.get heartbeat_counter in
-  if heartbeats = -1 then start_heartbeating ~interval_us:Env.heartbeat_interval_us;
+  let key = create Stack_pointer.Imm.null
+
+  (* Assumes that the current fiber does not have a dynamic binding. This is always
+     the case in [with_parallel] because it is called exactly once at the top level
+     of each promoted task. The queue pointed to by [ptr] must be stack allocated
+     and must outlive the application of [f]. *)
+  let[@inline] unsafe_with_queue ~ptr f = exclave_
+    unsafe_set_fiber key ptr;
+    let result = f () in
+    unsafe_set_fiber key Stack_pointer.Imm.null;
+    result
+  ;;
+end
+
+let with_parallel f ~scheduler ~tokens ~password ~handler = exclave_
   let queue =
-    Capsule.Data.Local.create (fun () : Parallel_kernel0.Runqueue.t -> exclave_
-      { promote = scheduler.#promote
-      ; wake = scheduler.#wake
-      ; head = Q (Stack_pointer.null ())
-      ; cursor = Q (Stack_pointer.null ())
-      ; heartbeats = max heartbeats 0
-      })
+    Capsule.Data.Local.create (fun [@inline] () : Parallel_kernel0.Runqueue.t -> exclave_
+      stack_
+        { tokens
+        ; promoting = false
+        ; head = Q (Stack_pointer.null ())
+        ; cursor = Q (Stack_pointer.null ())
+        ; scheduler
+        })
   in
-  Parallel { monitor = scheduler.#monitor; password; queue; handler }
+  (* Assure [queue] outlives the application of [f]. *)
+  Stack_pointer.unsafe_with_value queue ~f:(fun [@inline] _ -> exclave_
+    let ptr =
+      Capsule.Data.Local.extract queue ~password ~f:(fun queue ->
+        Stack_pointer.unsafe_with_value queue ~f:(fun ptr -> Stack_pointer.Imm.of_ptr ptr))
+    in
+    Dynamic.unsafe_with_queue ~ptr (fun [@inline] () -> exclave_
+      f (Parallel { password; queue; handler }) [@nontail])
+    [@nontail])
+  [@nontail]
 ;;
 
-let[@inline] monitor (Sequential monitor | Parallel { monitor; _ }) = monitor
-
 let[@inline] handler_exn = function
-  | Sequential _ -> failwith "sequential schedulers have no effect handler"
+  | Sequential -> failwith "sequential schedulers have no effect handler"
   | Parallel { handler; _ } -> handler
 ;;
 
@@ -47,14 +64,16 @@ module Thunk = struct
   include Parallel_kernel0.Thunk
 
   let[@inline] apply f parallel = exclave_
-    Panic.Result.handle_panics_and_report_exceptions
-      (monitor parallel)
-      (fun [@inline] () -> f parallel)
+    Result.try_with (fun [@inline] () -> f parallel)
+  ;;
+
+  let[@inline] encapsulate f parallel = exclave_
+    Result.Capsule.try_with (fun [@inline] () -> f parallel)
   ;;
 end
 
 module Job = struct
   include Parallel_kernel0.Job
 
-  let[@inline] wrap f parallel = exclave_ Thunk.apply f parallel
+  let[@inline] wrap f parallel = exclave_ Thunk.encapsulate f parallel
 end

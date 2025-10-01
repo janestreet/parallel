@@ -1,7 +1,0 @@
-open! Base
-
-(** [t] represents a scheduler that runs each task on one member of an internal pool of
-    worker domains. *)
-type t
-
-include Parallel_kernel.Scheduler.S_async with type t := t (** @inline *)

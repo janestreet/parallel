@@ -2,11 +2,11 @@ open! Base
 open! Import
 
 type t =
-  | Max_promotions
+  | Heartbeat_promotions
   | Heartbeat_interval_us
 
 let to_string = function
-  | Max_promotions -> "PARALLEL_MAX_PROMOTIONS"
+  | Heartbeat_promotions -> "PARALLEL_HEARTBEAT_PROMOTIONS"
   | Heartbeat_interval_us -> "PARALLEL_HEARTBEAT_INTERVAL_US"
 ;;
 
@@ -21,5 +21,5 @@ let get ?(min = Int.min_value) ?(max = Int.max_value) t ~default =
   i
 ;;
 
-let max_promotions = get Max_promotions ~default:100 ~min:0
-let heartbeat_interval_us = get Heartbeat_interval_us ~default:10 ~min:1 ~max:999_999
+let heartbeat_promotions = get Heartbeat_promotions ~default:10 ~min:0
+let heartbeat_interval_us = get Heartbeat_interval_us ~default:100 ~min:1 ~max:999_999

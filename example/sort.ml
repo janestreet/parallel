@@ -1,8 +1,9 @@
 open! Base
-module Capsule = Portable.Capsule.Expert
 module Par_array = Parallel.Arrays.Array
 module Slice = Par_array.Slice
+module Capsule = Await.Capsule
 
+(* $MDX part-begin=sort-utils *)
 let swap slice ~i ~j =
   let temp = Slice.get slice i in
   Slice.set slice i (Slice.get slice j);
@@ -25,7 +26,10 @@ let partition slice =
   !store
 ;;
 
+(* $MDX part-end *)
+
 module Sequential = struct
+  (* $MDX part-begin=sort-sequential *)
   let rec quicksort slice =
     if Slice.length slice > 1
     then (
@@ -36,6 +40,8 @@ module Sequential = struct
       quicksort right [@nontail])
   ;;
 
+  (* $MDX part-end *)
+
   let%bench_fun "sequential" =
     let array = Array.init 10_000 ~f:(fun _ -> Random.int 10_000) |> Par_array.of_array in
     fun () -> quicksort (Slice.slice array) [@nontail]
@@ -43,11 +49,12 @@ module Sequential = struct
 end
 
 module Parallel = struct
+  (* $MDX part-begin=sort-parallel *)
   let rec quicksort parallel slice =
     if Slice.length slice > 1
     then (
       let pivot = partition slice in
-      let (), () =
+      let #((), ()) =
         Slice.fork_join2
           parallel
           ~pivot
@@ -58,24 +65,27 @@ module Parallel = struct
       ())
   ;;
 
+  (* $MDX part-end *)
+
+  (* $MDX part-begin=quicksort-parallel *)
   let quicksort ~scheduler ~mutex array =
-    let monitor = Parallel.Monitor.create_root () in
-    Parallel_scheduler_work_stealing.schedule scheduler ~monitor ~f:(fun parallel ->
-      Capsule.Mutex.with_lock mutex ~f:(fun password ->
-        Capsule.Data.iter array ~password ~f:(fun array ->
-          let array = Par_array.of_array array in
+    Parallel_scheduler_work_stealing.parallel scheduler ~f:(fun parallel ->
+      Await_blocking.with_await Await.Terminator.never ~f:(fun await ->
+        Capsule.Mutex.with_lock await mutex ~f:(fun access ->
+          let array = Par_array.of_array (Capsule.Data.unwrap ~access array) in
           quicksort parallel (Slice.slice array) [@nontail])
         [@nontail])
       [@nontail])
   ;;
 
+  (* $MDX part-end *)
+
   let%bench_fun "parallel" =
-    let domains = Sys.getenv "DOMAINS" |> Option.bind ~f:Int.of_string_opt in
+    let max_domains = Sys.getenv "MAX_DOMAINS" |> Option.bind ~f:Int.of_string_opt in
     let scheduler =
-      (Parallel_scheduler_work_stealing.create [@alert "-experimental"]) ?domains ()
+      (Parallel_scheduler_work_stealing.create [@alert "-experimental"]) ?max_domains ()
     in
-    let (P key) = Capsule.create () in
-    let mutex = Capsule.Mutex.create key in
+    let (P mutex) = Capsule.Mutex.create () in
     let array =
       Capsule.Data.create (fun () -> Array.init 10_000 ~f:(fun _ -> Random.int 10_000))
     in

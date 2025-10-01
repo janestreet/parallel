@@ -1,12 +1,14 @@
 open! Base
 open! Import
 
-module type S = sig @@ portable
+module type S = sig
   type parallel : value mod contended portable
   type t
-  type 'k create_fn
 
-  val create : (unit -> t) create_fn
+  val create
+    :  ?max_domains:(int[@ocaml.doc {| default: [Multicore.max_domains ()] |}])
+    -> unit
+    -> t
 
   (** [stop t] waits for pending tasks to complete and joins all worker domains.
       Attempting to schedule new tasks after calling [stop] will raise.
@@ -14,44 +16,36 @@ module type S = sig @@ portable
       During [stop], idle workers will not attempt to steal asynchronous tasks. *)
   val stop : t -> unit
 
-  (* $MDX part-begin=schedule *)
+  (** [is_stopped t] returns [true] if [t] has been stopped. *)
+  val is_stopped : t -> bool
 
-  (** [schedule t ~monitor ~f] submits [f] to the scheduler [t] and waits for it to
-      complete before returning. If [f] raises an uncaught exception, the incident is
-      reported to [monitor]. *)
-  val schedule
-    :  t
-    -> monitor:Panic.Monitor.t
-    -> f:(parallel @ local -> 'a) @ once portable unyielding
-    -> 'a
+  (* $MDX part-begin=parallel *)
+
+  (** [parallel t ~f] creates an implementation of parallelism backed by [t], applies [f],
+      and waits for it to complete. *)
+  val parallel : t -> f:(parallel @ local -> 'a) @ once portable unyielding -> 'a
 
   (* $MDX part-end *)
 end
 
-module type S_async = sig @@ portable
-  include
-    S
-    with type 'k create_fn :=
-      ?domains:int (** default: [Stdlib.Domain.recommended_domain_count ()] *) -> 'k
+module type S_concurrent = sig
+  include S
+
+  (** [concurrent t ~terminator ~f] creates an implementation of concurrency and
+      parallelism backed by [t], applies [f], and waits for it to complete. Blocking
+      operations in [f] may be terminated via [terminator].
+
+      There is currently no mechanism to limit the creation rate of concurrent tasks. If
+      concurrent work is generated faster than it can be executed, the scheduler's queues
+      will grow unboundedly, leading to resource exhaustion. *)
+  val concurrent
+    :  t
+    -> terminator:Await.Terminator.t @ local
+    -> f:(parallel Concurrent.t @ local portable -> 'a) @ once portable unyielding
+    -> 'a
 
   module Expert : sig
-    (** [schedule_async t ~monitor ~on_panic ~f] submits [f] to the scheduler [t] and
-        does *not* wait for it to complete before returning. If [f] panics, the panic is
-        reported to [on_panic]. If [f] raises any other uncaught exception, the incident
-        is reported to both [monitor] and [on_panic]. If [on_panic] raises an uncaught
-        exception, the program is terminated.
-
-        Blocking on an asynchronous task is not supported and will lead to deadlocks.
-        However, asynchronous tasks may take locks.
-
-        There is currently no mechanism to limit the creation rate of asynchronous tasks.
-        If asynchronous work is generated faster than it can be executed, the scheduler's
-        queues will grow unboundedly, leading to resource exhaustion. *)
-    val schedule_async
-      :  t
-      -> monitor:Panic.Monitor.t
-      -> on_panic:(Panic.t -> unit) @ once portable unyielding
-      -> f:(parallel @ local -> unit) @ once portable unyielding
-      -> unit
+    (** [scheduler t] is a concurrent scheduler that runs tasks on [t]. *)
+    val scheduler : t -> parallel Concurrent.Scheduler.t
   end
 end

@@ -9,8 +9,8 @@ end
 
 val start : unit -> 'a t
 
-(** [fiber t job ~scheduler] attaches [t] to [job] and returns a fiber [f] that may be
-    executed on another domain.
+(** [fiber t job ~scheduler ~tokens] attaches [t] to [job] and returns a fiber [f] that
+    may be executed on another domain. [f] starts with [tokens] promotion tokens.
 
     Applying [f] returns after one of three conditions are met.
 
@@ -26,6 +26,7 @@ val fiber
   :  'a t
   -> 'a Parallel_kernel1.Job.t @ once portable
   -> scheduler:Parallel_kernel0.Scheduler.t
+  -> tokens:int
   -> (unit -> unit) @ once portable
 
 (** [await t job parallel] checks the state of the fiber [f] associated with [t].
@@ -42,8 +43,8 @@ val fiber
     Because [await] may suspend the current fiber, it may only be called while running
     within a fiber created by [fiber]. Further, the promise [t] must have been attached to
     [job] by a previous call to [fiber t job]. *)
-val await
+val await_or_run
   :  'a t
   -> 'a Parallel_kernel1.Job.t @ once portable
   -> Parallel_kernel1.t @ local
-  -> 'a Panic.Result.t @ local unique
+  -> 'a Result.Capsule.t @ local unique

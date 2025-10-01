@@ -1,6 +1,7 @@
 (library
  (name parallel_example)
  (public_name parallel.example)
- (libraries base parallel parallel_scheduler_work_stealing portable stdio)
+ (libraries await await.blocking base parallel
+   parallel_scheduler_work_stealing stdio)
  (preprocess
   (pps ppx_jane)))

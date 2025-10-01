@@ -7,51 +7,46 @@ let failwith s : _ Pair_or_null.t =
   | (_ : Nothing.t) -> .
 ;;
 
-type ('s, 'a) unknown : value mod contended portable =
-  { current : 's @@ contended global portable
-  ; next :
-      Parallel_kernel.t @ local
-      -> 's @ contended portable
-      -> ('a, 's) Pair_or_null.t @ contended portable
-    @@ global portable
-  ; split :
-      Parallel_kernel.t @ local
-      -> 's @ contended portable
-      -> ('s, 's) Pair_or_null.t @ contended portable
-    @@ global portable
+type ('s : value mod contended portable unyielding
+     , 'a : value mod portable unyielding)
+     unknown =
+  { current : 's @@ global
+  ; next : Parallel_kernel.t @ local -> 's -> ('a, 's) Pair_or_null.t
+    @@ global portable unyielding
+  ; split : Parallel_kernel.t @ local -> 's -> ('s, 's) Pair_or_null.t
+    @@ global portable unyielding
   }
 
-type ('s, 'a) known =
-  { current : 's @@ contended global portable
-  ; next :
-      Parallel_kernel.t @ local
-      -> 's @ contended portable
-      -> ('a, 's) Pair_or_null.t @ contended portable
-    @@ global portable
-  ; split_at :
-      Parallel_kernel.t @ local
-      -> 's @ contended portable
-      -> n:int
-      -> ('s, 's) Pair_or_null.t @ contended portable
-    @@ global portable
-  ; length : 's @ contended portable -> int @@ global portable
+type ('s : value mod contended portable unyielding
+     , 'a : value mod portable unyielding)
+     known =
+  { current : 's @@ global
+  ; next : Parallel_kernel.t @ local -> 's -> ('a, 's) Pair_or_null.t
+    @@ global portable unyielding
+  ; split_at : Parallel_kernel.t @ local -> 's -> n:int -> ('s, 's) Pair_or_null.t
+    @@ global portable unyielding
+  ; length : 's -> int @@ global portable unyielding
   }
 
-type (_, _) seq : value mod contended portable =
+type%fuelproof (_ : value mod portable unyielding
+               , _)
+               seq :
+               value mod contended portable unyielding =
   | Unknown : (_, 'a) unknown -> ('a, [> `Unknown ]) seq
   | Known : (_, 'a) known -> ('a, [> `Known ]) seq
-[@@unsafe_allow_any_mode_crossing]
 
-let parallel_fold parallel ~acc ~f ~combine ~state ~next ~split =
+let parallel_fold parallel ~f ~init ~state ~next ~split ~combine =
   Parallel_kernel.fold
     parallel
-    ~init:#(acc, state)
+    ~init
+    ~state
     ~next:(fun parallel acc state ->
       match%optional_u.Pair_or_null next parallel state with
       | Some a_state ->
         let #(a, state) = a_state in
         Pair_or_null.some (f parallel acc a) state
       | None -> Pair_or_null.none ())
+    ~stop:(fun _ acc -> acc)
     ~fork:split
     ~join:combine [@nontail]
 ;;
@@ -103,7 +98,7 @@ module With_length = struct
     else (
       let length (~start, ~stop) = (stop - start + stride - sign) / stride in
       Known
-        { current = ~start, ~stop
+        { current = ((~start, ~stop) : start:int * stop:int)
         ; length
         ; next =
             (fun _ (~start, ~stop) ->
@@ -140,7 +135,7 @@ module With_length = struct
   let filter_map' (t : _ t) ~f = exclave_
     match t with
     | Known ({ current; next; _ } as known) ->
-      let[@loop always] rec next' parallel current =
+      let[@loop] rec next' parallel current =
         match%optional_u.Pair_or_null next parallel current with
         | None -> Pair_or_null.none ()
         | Some a_current ->
@@ -161,14 +156,16 @@ module With_length = struct
 
   let of_iarray iarray = exclave_
     Known
-      { current = iarray, ~start:0, ~stop:(Iarray.length iarray)
+      { current =
+          ((iarray, ~start:0, ~stop:(Iarray.length iarray))
+           : (_ : value mod contended portable unyielding) iarray * start:int * stop:int)
       ; length = (fun (_, ~start, ~stop) -> stop - start)
       ; next =
           (fun _ (iarray, ~start, ~stop) ->
             if start < stop
             then
               Pair_or_null.some
-                (Iarray.racy_get_portable_contended iarray start)
+                (Iarray.unsafe_get iarray start)
                 (iarray, ~start:(start + 1), ~stop)
             else Pair_or_null.none ())
       ; split_at =
@@ -183,13 +180,16 @@ module With_length = struct
 
   let zip_exn (t0 : _ t) (t1 : _ t) : _ t = exclave_
     match t0, t1 with
-    | ( Known { current = current0; next = next0; split_at = split_at0; length = length0 }
-      , Known { current = current1; next = next1; split_at = split_at1; length = length1 }
-      ) ->
+    | ( Known (type (s0 : value mod contended portable unyielding))
+          ({ current = current0; next = next0; split_at = split_at0; length = length0 } :
+            (s0, _) known)
+      , Known (type (s1 : value mod contended portable unyielding))
+          ({ current = current1; next = next1; split_at = split_at1; length = length1 } :
+            (s1, _) known) ) ->
       if length0 current0 <> length1 current1
       then invalid_arg "Parallel_sequence.With_length.zip_exn";
       Known
-        { current = current0, current1
+        { current = ((current0, current1) : s0 * s1)
         ; next =
             (fun parallel (current0, current1) ->
               match%optional_u.Pair_or_null
@@ -323,7 +323,11 @@ module With_length = struct
   ;;
 
   module Product = struct
-    type ('s0, 's1, 'a) t =
+    type ('s0 : value mod contended portable unyielding
+         , 's1 : value mod contended portable unyielding
+         , 'a : value mod contended portable unyielding)
+         t :
+         value mod contended portable unyielding =
       | One of 'a * 's1
       | Prod of 's0 * 's1
       | Consl of 'a * 's1 * ('s0, 's1, 'a) t
@@ -524,7 +528,7 @@ module With_length = struct
     ;;
   end
 
-  let product (Known seq0 : _ t) (Known seq1 : _ t) = exclave_
+  let product_left (Known seq0 : _ t) (Known seq1 : _ t) = exclave_
     Known
       { current = Product.create seq0.current seq1.current
       ; next = Product.next_product ~next0:seq0.next ~next1:seq1.next
@@ -540,17 +544,22 @@ module With_length = struct
       }
   ;;
 
+  let product_right t0 t1 = exclave_
+    let seq = product_left t1 t0 in
+    map seq ~f:(fun (b, a) : ('a * 'b) -> a, b) [@nontail]
+  ;;
+
   let iteri' parallel t ~f =
     match indexed t with
     | Known ({ current; next; _ } as known) ->
       parallel_fold
         parallel
-        ~acc:()
         ~f:(fun parallel () (i, a) -> f parallel i a)
-        ~combine:(fun _ () () -> ())
+        ~init:(fun () -> ())
         ~state:current
         ~next
-        ~split:(split_middle known) [@nontail]
+        ~split:(split_middle known)
+        ~combine:(fun _ () () -> ()) [@nontail]
   ;;
 
   let iteri parallel t ~f = iteri' parallel t ~f:(fun _ a -> f a) [@nontail]
@@ -560,12 +569,12 @@ module With_length = struct
     | Known ({ current; next; _ } as known) ->
       parallel_fold
         parallel
-        ~acc:init
         ~f
-        ~combine
+        ~init
         ~state:current
         ~next
-        ~split:(split_middle known) [@nontail]
+        ~split:(split_middle known)
+        ~combine [@nontail]
   ;;
 
   let fold parallel t ~init ~f ~combine =
@@ -599,81 +608,81 @@ module With_length = struct
     fold'
       parallel
       t
-      ~init:()
+      ~init:(fun () -> ())
       ~f:(fun parallel () a -> f parallel a)
       ~combine:(fun _ () () -> ())
   ;;
 
   let iter parallel t ~f = iter' parallel t ~f:(fun _ a -> f a) [@nontail]
 
-  let reduce' parallel t ~f =
+  let reduce' parallel (t : 'a t) ~f =
     fold'
       parallel
       t
-      ~init:None
+      ~init:(fun () : 'a option -> None)
       ~f:(fun parallel acc a ->
         match acc with
         | Some acc -> Some (f parallel acc a)
         | None -> Some a)
       ~combine:(fun parallel a b ->
-        Option.merge_portable_contended ~f:(fun a b -> f parallel a b) a b [@nontail])
+        Option.merge ~f:(fun a b -> f parallel a b) a b [@nontail])
   ;;
 
   let reduce parallel t ~f = reduce' parallel t ~f:(fun _ a -> f a) [@nontail]
 
-  let find' parallel t ~f =
+  let find' parallel (t : 'a t) ~f =
     fold'
       parallel
       t
-      ~init:None
+      ~init:(fun () : 'a option -> None)
       ~f:(fun parallel acc a ->
         match acc with
         | Some _ -> acc
         | None -> if f parallel a then Some a else None)
-      ~combine:(fun _ a b -> Option.first_some_portable_contended a b) [@nontail]
+      ~combine:(fun _ a b -> Option.first_some a b)
   ;;
 
   let find parallel t ~f = find' parallel t ~f:(fun _ a -> f a) [@nontail]
 
-  let findi' parallel t ~f =
+  let findi' parallel (t : 'a t) ~f =
     foldi'
       parallel
       t
-      ~init:None
+      ~init:(fun () : (int * 'a) option -> None)
       ~f:(fun parallel i acc a ->
         match acc with
         | Some _ -> acc
         | None -> if f parallel i a then Some (i, a) else None)
-      ~combine:(fun _ a b -> Option.first_some_portable_contended a b) [@nontail]
+      ~combine:(fun _ a b -> Option.first_some a b) [@nontail]
   ;;
 
   let findi parallel t ~f = findi' parallel t ~f:(fun _ i a -> f i a) [@nontail]
 
-  let to_list parallel (t : _ t) =
+  let to_list parallel (t : 'a t) =
     match t with
     | Known ({ current; next; _ } as known) ->
       parallel_fold
         parallel
-        ~acc:[]
-        ~f:(fun _ acc a -> a :: acc)
-        ~combine:(fun _ a b -> List.(b @ a))
+        ~init:(fun () : 'a list -> [])
+        ~f:(fun _ acc a : 'a list -> a :: acc)
         ~state:current
         ~next
         ~split:(split_middle known)
-      |> List.rev_portable_contended
+        ~combine:(fun _ a b -> b @ a)
+      |> List.rev
   ;;
 
   let unsafe_to_array parallel (Known seq : _ t) =
     let length = seq.length seq.current in
     match%optional_u.Pair_or_null seq.next parallel seq.current with
-    | None -> Array.empty ()
+    | None -> [||]
     | Some a_current ->
       let #(a, current) = a_current in
-      let arr = Array.make_portable_contended length a in
+      let arr = Array.create ~len:length a in
       iteri'
         parallel
         (Known { seq with current })
-        ~f:(fun _ i a -> Array.racy_set_contended arr (i + 1) a);
+        ~f:(fun _ i a -> Array.unsafe_racy_set_contended arr (i + 1) a);
       arr
   ;;
 
@@ -719,7 +728,7 @@ let map t ~f = exclave_ map' t ~f:(fun _ a -> f a) [@nontail]
 let filter_map' t ~f = exclave_
   match t with
   | Unknown ({ next; _ } as unknown) ->
-    let[@loop always] rec next' parallel current =
+    let[@loop] rec next' parallel current =
       match%optional_u.Pair_or_null next parallel current with
       | None -> Pair_or_null.none ()
       | Some a_current ->
@@ -783,7 +792,10 @@ let append seq0 seq1 = exclave_
 ;;
 
 module Concat = struct
-  type (_, 'ss) t =
+  type%fuelproof (_
+                 , 'ss : value mod contended portable unyielding)
+                 t :
+                 value mod contended portable unyielding =
     | All of 'ss
     | One : (_, 'a) unknown -> ('a, 'ss) t
     | Cons : (_, 'a) unknown * 'ss -> ('a, 'ss) t
@@ -791,15 +803,11 @@ module Concat = struct
   let create ss = All ss
 
   let rec next_all
-    : type ss.
-      next:
-        (_ @ local
-         -> ss @ contended portable
-         -> (_, ss) Pair_or_null.t @ contended portable)
-      @ portable
+    : type (ss : value mod contended portable unyielding).
+      next:(_ @ local -> ss -> (_, ss) Pair_or_null.t) @ portable unyielding
       -> _ @ local
-      -> ss @ contended portable
-      -> (_, (_, ss) t) Pair_or_null.t @ contended portable
+      -> ss
+      -> (_, (_, ss) t) Pair_or_null.t
     =
     fun ~next parallel ss ->
     match%optional_u.Pair_or_null next parallel ss with
@@ -817,16 +825,14 @@ module Concat = struct
     | None -> Pair_or_null.none ()
 
   and next_cons
-    : type s ss.
-      next:
-        (_ @ local
-         -> ss @ contended portable
-         -> (_, ss) Pair_or_null.t @ contended portable)
-      @ portable
+    : type (s : value mod contended portable unyielding) (ss :
+                                                         value
+                                                         mod contended portable unyielding).
+      next:(_ @ local -> ss -> (_, ss) Pair_or_null.t) @ portable unyielding
       -> _ @ local
       -> (s, _) unknown @ local
-      -> ss @ contended portable
-      -> (_, (_, ss) t) Pair_or_null.t @ contended portable
+      -> ss
+      -> (_, (_, ss) t) Pair_or_null.t
     =
     fun ~next parallel seq ss ->
     match%optional_u.Pair_or_null seq.next parallel seq.current with
@@ -907,9 +913,12 @@ let concat seqs = exclave_
 ;;
 
 module Product = struct
-  type ('s0, 's1, 'a) t =
-    | One of 'a * 's1
-    | Cons of ('a * row:'s1 * 's0 * 's1)
+  type ('s0 : value mod contended portable unyielding
+       , 's1 : value mod contended portable unyielding
+       , 'a : value mod contended portable unyielding)
+       t =
+    | One of #('a * row:'s1)
+    | Cons of #('a * row:'s1 * 's0 * 's1)
     | Prod of 's0 * 's1
 
   let create s0 s1 = Prod (s0, s1)
@@ -918,7 +927,7 @@ module Product = struct
     match%optional_u.Pair_or_null next1 parallel row with
     | Some b_row ->
       let #(b, row) = b_row in
-      Pair_or_null.some (a, b) (Cons (a, ~row, s0, s1))
+      Pair_or_null.some (a, b) (Cons #(a, ~row, s0, s1))
     | None -> next_prod ~next0 ~next1 parallel s0 s1
 
   and next_prod ~next0 ~next1 parallel s0 s1 =
@@ -934,12 +943,12 @@ module Product = struct
     fun parallel t ->
       match t with
       | Prod (s0, s1) -> next_prod ~next0 ~next1 parallel s0 s1
-      | Cons (a, ~row, s0, s1) -> next_cons ~next0 ~next1 parallel a row s0 s1
-      | One (a, s1) ->
-        (match%optional_u.Pair_or_null next1 parallel s1 with
-         | Some b_s1 ->
-           let #(b, s1) = b_s1 in
-           Pair_or_null.some (a, b) (One (a, s1))
+      | Cons #(a, ~row, s0, s1) -> next_cons ~next0 ~next1 parallel a row s0 s1
+      | One #(a, ~row) ->
+        (match%optional_u.Pair_or_null next1 parallel row with
+         | Some b_row ->
+           let #(b, row) = b_row in
+           Pair_or_null.some (a, b) (One #(a, ~row))
          | None -> Pair_or_null.none ())
   ;;
 
@@ -961,33 +970,33 @@ module Product = struct
     match%optional_u.Pair_or_null split_prod ~split0 ~split1 parallel s0 s1 with
     | Some s0_s1 ->
       let #((s00, s10), (s01, s11)) = s0_s1 in
-      Pair_or_null.some (Cons (a, ~row, s00, s10)) (Prod (s01, s11))
-    | None -> Pair_or_null.some (One (a, s1)) (Prod (s0, s1))
+      Pair_or_null.some (Cons #(a, ~row, s00, s10)) (Prod (s01, s11))
+    | None -> Pair_or_null.some (One #(a, ~row)) (Prod (s0, s1))
   ;;
 
   let split_product ~split0 ~split1 =
     ();
     fun parallel t ->
       match t with
-      | Cons (a, ~row, s0, s1) -> split_cons ~split0 ~split1 parallel a row s0 s1
+      | Cons #(a, ~row, s0, s1) -> split_cons ~split0 ~split1 parallel a row s0 s1
       | Prod (s0, s1) ->
         (match%optional_u.Pair_or_null split_prod ~split0 ~split1 parallel s0 s1 with
          | Some s0_s1 ->
            let #((s00, s10), (s01, s11)) = s0_s1 in
            Pair_or_null.some (Prod (s00, s10)) (Prod (s01, s11))
          | None -> Pair_or_null.none ())
-      | One (a, s1) ->
-        (match%optional_u.Pair_or_null split1 parallel s1 with
-         | Some s1 ->
-           let #(s10, s11) = s1 in
-           Pair_or_null.some (One (a, s10)) (One (a, s11))
+      | One #(a, ~row) ->
+        (match%optional_u.Pair_or_null split1 parallel row with
+         | Some row ->
+           let #(row0, row1) = row in
+           Pair_or_null.some (One #(a, ~row:row0)) (One #(a, ~row:row1))
          | None -> Pair_or_null.none ())
   ;;
 end
 
-let product seq0 seq1 = exclave_
+let product_left seq0 seq1 = exclave_
   match seq0, seq1 with
-  | (Known _ as seq0), (Known _ as seq1) -> With_length.product seq0 seq1
+  | (Known _ as seq0), (Known _ as seq1) -> With_length.product_left seq0 seq1
   | Known seq0, Unknown seq1 ->
     Unknown
       { current = Product.create seq0.current seq1.current
@@ -1010,13 +1019,18 @@ let product seq0 seq1 = exclave_
       }
 ;;
 
+let product_right t0 t1 = exclave_
+  let seq = product_left t1 t0 in
+  map seq ~f:(fun (b, a) : ('a * 'b) -> a, b) [@nontail]
+;;
+
 let concat_map' t ~f = exclave_ concat (map' t ~f)
 let concat_map t ~f = exclave_ concat (map t ~f)
 
 let fold' parallel t ~init ~f ~combine =
   match t with
   | Unknown { current; next; split } ->
-    parallel_fold parallel ~acc:init ~f ~combine ~state:current ~next ~split [@nontail]
+    parallel_fold parallel ~init ~f ~state:current ~next ~split ~combine [@nontail]
   | Known _ as t -> With_length.fold' parallel t ~init ~f ~combine
 ;;
 
@@ -1033,74 +1047,59 @@ let iter' parallel t ~f =
   fold'
     parallel
     t
-    ~init:()
+    ~init:(fun () -> ())
     ~f:(fun parallel () a -> f parallel a)
     ~combine:(fun _ () () -> ()) [@nontail]
 ;;
 
 let iter parallel t ~f = iter' parallel t ~f:(fun _ a -> f a) [@nontail]
 
-let reduce' parallel t ~f =
+let reduce' parallel (t : 'a t) ~f =
   fold'
     parallel
     t
-    ~init:None
+    ~init:(fun () : 'a option -> None)
     ~f:(fun parallel acc a ->
       match acc with
       | Some acc -> Some (f parallel acc a)
       | None -> Some a)
     ~combine:(fun parallel a b ->
-      Option.merge_portable_contended ~f:(fun a b -> f parallel a b) a b [@nontail])
-  [@nontail]
+      Option.merge ~f:(fun a b -> f parallel a b) a b [@nontail])
 ;;
 
 let reduce parallel t ~f = reduce' parallel t ~f:(fun _ acc a -> f acc a) [@nontail]
 
-let find' parallel t ~f =
+let find' parallel (t : 'a t) ~f =
   fold'
     parallel
     t
-    ~init:None
+    ~init:(fun () : 'a option -> None)
     ~f:(fun parallel acc a ->
       match acc with
       | Some _ -> acc
       | None -> if f parallel a then Some a else None)
-    ~combine:(fun _ a b -> Option.first_some_portable_contended a b) [@nontail]
+    ~combine:(fun _ a b -> Option.first_some a b) [@nontail]
 ;;
 
 let find parallel t ~f = find' parallel t ~f:(fun _ a -> f a) [@nontail]
 
-let to_list parallel t =
+let to_list parallel (t : 'a t) =
   match t with
   | Unknown { current; next; split } ->
     parallel_fold
       parallel
-      ~acc:[]
-      ~f:(fun _ acc a -> a :: acc)
-      ~combine:(fun _ a b -> List.(b @ a))
+      ~init:(fun () : 'a list -> [])
+      ~f:(fun _ acc a : 'a list -> a :: acc)
       ~state:current
       ~next
       ~split
-    |> List.rev_portable_contended
+      ~combine:(fun _ a b -> b @ a)
+    |> List.rev
   | Known _ as t -> With_length.to_list parallel t
-;;
-
-let unsafe_to_array parallel t =
-  match to_list parallel t with
-  | [] -> Array.empty ()
-  | hd :: tl as l ->
-    let arr = Array.make_portable_contended (List.length l) hd in
-    let rec fill i = function
-      | [] -> arr
-      | hd :: tl ->
-        Array.racy_set_contended arr i hd;
-        fill (i + 1) tl
-    in
-    fill 1 tl
 ;;
 
 let to_iarray parallel t =
   match t with
-  | Unknown _ -> unsafe_to_array parallel t |> Iarray.unsafe_of_array__promise_no_mutation
+  | Unknown _ -> to_list parallel t |> Iarray.of_list
   | Known _ as t -> With_length.to_iarray parallel t
 ;;

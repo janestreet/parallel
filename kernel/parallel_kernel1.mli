@@ -7,24 +7,23 @@ include module type of struct
   include Parallel_kernel0.Parallel
 end
 
-(** [heartbeat_counter] contains the number of heartbeat intervals elapsed since the first
-    call to [create]. It is incremented every [Env.heartbeat_interval_us] microseconds by
-    a background thread. *)
-val heartbeat_counter : int Atomic.t
+module Dynamic : sig
+  type 'a t : immutable_data
 
-val create_sequential : Panic.Monitor.t -> t @ local
+  val key : Parallel_kernel0.Runqueue.t Stack_pointer.Imm.t t
+end
 
-val create_parallel
-  :  scheduler:Parallel_kernel0.Scheduler.t
+val with_parallel
+  :  (t @ local -> 'a @ local portable unique) @ local once portable
+  -> scheduler:Parallel_kernel0.Scheduler.t
+  -> tokens:int
   -> password:'k Capsule.Password.t @ local
-  -> handler:Parallel_kernel0.Await.t Effect.Handler.t @ local portable
-  -> t @ local
-
-val monitor : t @ local -> Panic.Monitor.t
+  -> handler:Parallel_kernel0.Wait.t Effect.Handler.t @ local portable
+  -> 'a @ local portable unique
 
 val handler_exn
   :  t @ local
-  -> Parallel_kernel0.Await.t Effect.Handler.t @ contended local portable
+  -> Parallel_kernel0.Wait.t Effect.Handler.t @ contended local portable
 
 module Thunk : sig
   include module type of struct
@@ -32,9 +31,14 @@ module Thunk : sig
   end
 
   val apply
+    :  'a t @ local once
+    -> Parallel_kernel0.Parallel.t @ local
+    -> 'a Result.t @ local unique
+
+  val encapsulate
     :  'a t @ local once portable
     -> Parallel_kernel0.Parallel.t @ local
-    -> 'a Panic.Result.t @ local unique
+    -> 'a Result.Capsule.t @ local unique
 end
 
 module Job : sig

@@ -4,4 +4,4 @@ open! Base
     work-stealing pool of worker domains. *)
 type t
 
-include Parallel_kernel.Scheduler.S_async with type t := t (** @inline *)
+include Parallel_kernel.Scheduler.S_concurrent with type t := t (** @inline *)

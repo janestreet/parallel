@@ -1,15 +1,6 @@
-open! Base
+open Base
 module Atomic = Portable.Atomic
-module Capsule = Portable.Capsule.Expert
-
-module Capsule_with_mutex = struct
-  type ('a, 'k) inner =
-    { mutex : 'k Capsule.Mutex.t
-    ; data : ('a, 'k) Capsule.Data.t
-    }
-
-  type 'a t = P : ('a, 'k) inner -> 'a t [@@unboxed]
-end
+open Await
 
 module Once_deq : sig @@ portable
   type t : value mod portable
@@ -35,10 +26,9 @@ end
 module Self = Once_deq
 
 type 'k queue_inner =
-  { mutex : 'k Capsule.Mutex.t
-  ; cond : 'k Capsule.Condition.t
-  ; stealer : Once_deq.t @@ contended
-  ; sleepy : bool Atomic.t
+  { stealer : Once_deq.t @@ contended
+  ; sleepy : bool Awaitable.t
+  ; mutex : 'k Mutex.t
   }
 
 type queue : value mod contended portable = P : 'k queue_inner -> queue [@@unboxed]
@@ -49,15 +39,14 @@ type t =
   }
 
 let create_one () =
-  let (P key) = Capsule.create () in
-  let mutex = Capsule.Mutex.create key in
-  let (P self_key) = Capsule.create () in
-  let self_mutex = Capsule.Mutex.create self_key in
-  let cond = Capsule.Condition.create () in
-  let queue = Capsule.Data.create Once_deq.create in
-  let sleepy = Atomic.make_alone false in
-  ( Capsule_with_mutex.P { mutex = self_mutex; data = queue }
-  , P { mutex; cond; stealer = Capsule.Data.project queue; sleepy } )
+  let queue = Capsule.Isolated.create Once_deq.create in
+  let queue, { aliased = stealer } = Capsule.Isolated.get_id_contended queue in
+  let sleepy = Awaitable.make_alone false in
+  (* NOTE: We're not actually protecting any data in this mutex's capsule; we're just
+     using it to synchronize [stealer] and [sleepy], which are both atomic. *)
+  let (P key) = Capsule.Expert.create () in
+  let mutex = Mutex.create key in
+  Unique.Once.Atomic.make { many = queue }, P { stealer; sleepy; mutex }
 ;;
 
 let create ~domains =
@@ -66,10 +55,40 @@ let create ~domains =
   owners, { queues; sleepers }
 ;;
 
-let[@inline] wake { queues; _ } ~idx =
-  let (P { mutex; cond; _ }) = Iarray.get queues idx in
-  (* Must be atomic with respect to [steal_or_break] and going to sleep in [work]. *)
-  Capsule.Mutex.with_lock mutex ~f:(fun _ -> Capsule.Condition.signal cond) [@nontail]
+let length t = Iarray.length t.queues
+
+let[@inline] wake' { queues; _ } ~idx =
+  let (P { mutex; sleepy; _ }) = Iarray.get queues idx in
+  (* We must lock before checking [sleepy] so we don't miss workers that have run out of
+     work but not yet set [sleepy]. Clearing [sleepy] races with [try_wait], which is okay
+     because [try_wake] is guaranteed to wake up the worker if it wins the race.
+
+     We use a spinlock here because we don't expect this lock to ever be contended for
+     very long; all critical sections are bounded and short. *)
+  Await_spinning.with_await Terminator.never ~f:(fun await ->
+    Mutex.with_password await mutex ~f:(fun _ : bool ->
+      (* We first [Atomic.get] because it's more efficient (on x86) to do a nonatomic
+         load to check that we want to attempt waking before the atomic exchange, which
+         locks the cache line (test-and-test-and-set). *)
+      let wake = Awaitable.get sleepy in
+      if wake && Awaitable.exchange sleepy false then Awaitable.signal sleepy;
+      wake))
+;;
+
+let[@inline] wake t ~idx = ignore (wake' t ~idx : bool)
+
+let[@inline] wake_one t =
+  let len = Iarray.length t.queues in
+  let start = Random.int len in
+  let rec wake i =
+    if i < len
+    then (
+      let idx = start + i in
+      (* start < len, i < len -> idx < 2 * len *)
+      let idx = Bool.select (idx >= len) (idx - len) idx in
+      if not (wake' t ~idx) then wake (i + 1))
+  in
+  wake 0
 ;;
 
 let[@inline] try_wake { queues; sleepers } ~n =
@@ -93,18 +112,18 @@ let[@inline] try_wake { queues; sleepers } ~n =
     let rec find i ~n =
       if i < len && n > 0
       then (
-        let j = (start + i) % len in
+        let j = start + i in
+        (* start < len, i < len -> j < 2 * len *)
+        let j = Bool.select (j >= len) (j - len) j in
         (* Safety: 0 <= j < len = Iarray.length queues *)
-        let (P { mutex; cond; sleepy; _ }) = Iarray.unsafe_get queues j in
-        (* Clear sleepy so others don't try to wake this queue.
-
-           We first [Atomic.get &&] because it's more efficient (on x86) to do a nonatomic
-           load to check that we want to attempt waking before the atomic exchange, which
-           locks the cache line (cf test-and-test-and-set). *)
-        if Atomic.get sleepy && Atomic.exchange sleepy false
+        let (P { mutex; sleepy; _ }) = Iarray.unsafe_get queues j in
+        if Awaitable.get sleepy
         then (
-          (* Lock to wait until the queue is actually sleeping. *)
-          Capsule.Mutex.with_lock mutex ~f:(fun _ -> Capsule.Condition.signal cond);
+          if Awaitable.exchange sleepy false
+          then
+            (* Lock to wait until the queue is actually sleeping. *)
+            Await_spinning.with_await Terminator.never ~f:(fun await ->
+              Mutex.with_password await mutex ~f:(fun _ -> Awaitable.signal sleepy));
           find (i + 1) ~n:(n - 1))
         else find (i + 1) ~n)
     in
@@ -117,7 +136,8 @@ let steal queues ~idx =
   let rec aux i =
     if i < n
     then (
-      let j = (start + i) % n in
+      let j = start + i in
+      let j = Bool.select (j >= n) (j - n) j in
       if j = idx
       then aux (i + 1)
       else (
@@ -131,30 +151,49 @@ let steal queues ~idx =
 ;;
 
 let work { queues; sleepers } ~self ~idx ~break =
-  let (P { mutex; cond; sleepy; _ }) = Iarray.get queues idx in
-  let rec steal_or_break key =
-    match steal queues ~idx with
-    | This _ as task -> task, key
-    | Null when break () -> Null, key
-    | Null ->
-      Atomic.incr sleepers;
-      Atomic.set sleepy true;
-      let key = Capsule.Condition.wait cond ~mutex key in
-      Atomic.set sleepy false;
-      Atomic.decr sleepers;
-      steal_or_break key
-  in
-  let rec go () =
-    match Once_deq.pop self with
-    | This task ->
-      task ();
-      go ()
-    | Null ->
-      (match Capsule.Mutex.with_key mutex ~f:steal_or_break with
-       | This task ->
-         task ();
-         go ()
-       | Null -> ())
-  in
-  go () [@nontail]
+  (* We use spinning for operations on the queue mutex, since we only want to get
+     descheduled if we know there's no work to do. *)
+  Await_spinning.with_await Terminator.never ~f:(fun spin ->
+    let (P { sleepy; mutex; _ }) = Iarray.get queues idx in
+    let[@inline] rec steal_or_break key =
+      match steal queues ~idx with
+      | This _ as task -> #(task, key)
+      | Null when break () -> #(Null, key)
+      | Null ->
+        Atomic.incr sleepers;
+        Awaitable.set sleepy true;
+        let rec sleep key =
+          if Awaitable.get sleepy
+          then (
+            match
+              Mutex.release_temporarily spin mutex key ~f:(fun () ->
+                (* Now we can be descheduled. *)
+                Await_blocking.with_await Terminator.never ~f:(fun block ->
+                  Awaitable.await block sleepy ~until_phys_unequal_to:true))
+            with
+            | #(Signaled, key) -> sleep key
+            | #(Terminated, _) ->
+              Atomic.decr sleepers;
+              (match raise Await.Terminated with
+               | (_ : Nothing.t) -> .))
+          else key
+        in
+        let key = sleep key in
+        Atomic.decr sleepers;
+        steal_or_break key
+    in
+    let rec go () =
+      match Once_deq.pop self with
+      | This task ->
+        task ();
+        go ()
+      | Null ->
+        (match Mutex.with_key spin mutex ~f:steal_or_break with
+         | This task ->
+           task ();
+           go ()
+         | Null -> ())
+    in
+    go () [@nontail])
+  [@nontail]
 ;;

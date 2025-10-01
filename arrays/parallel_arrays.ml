@@ -5,24 +5,26 @@ include Parallel_arrays_intf
 type%template 'a modality = { modality : 'a @@ m }
 [@@unboxed] [@@modality m = (uncontended, shared)]
 
-type ('a, 'b) f = Parallel_kernel.t @ local -> int -> 'a @ portable -> 'b @ portable
+type ('a, 'b) f = Parallel_kernel.t @ local -> int -> 'a -> 'b
 
-let magic_uncontended = (Obj.magic_uncontended [@mode many portable aliased])
-
-let[@inline] wrap : f:('a @ portable -> 'b @ portable) @ portable -> ('a, 'b) f @ portable
+let[@inline] wrap
+  : ('a : value mod portable unyielding) ('b : value mod portable unyielding).
+  f:('a -> 'b) @ portable unyielding -> ('a, 'b) f @ portable unyielding
   =
   fun ~f _ _ a -> f a
 ;;
 
 let[@inline] wrapi
-  : f:(int -> 'a @ portable -> 'b @ portable) @ portable -> ('a, 'b) f @ portable
+  : ('a : value mod portable unyielding) ('b : value mod portable unyielding).
+  f:(int -> 'a -> 'b) @ portable unyielding -> ('a, 'b) f @ portable unyielding
   =
   fun ~f _ i a -> f i a
 ;;
 
 let[@inline] wrap'
-  :  f:(Parallel_kernel.t @ local -> 'a @ portable -> 'b @ portable) @ portable
-  -> ('a, 'b) f @ portable
+  : ('a : value mod portable unyielding) ('b : value mod portable unyielding).
+  f:(Parallel_kernel.t @ local -> 'a -> 'b) @ portable unyielding
+  -> ('a, 'b) f @ portable unyielding
   =
   fun ~f parallel _ a -> f parallel a
 ;;
@@ -48,15 +50,15 @@ let[@inline] split ~grain ~i ~j =
 
 module Make_init (Array : sig
   @@ portable
-    type 'a t
-    type 'a mut
+    type ('a : value mod portable unyielding) t
+    type ('a : value mod portable unyielding) mut : mutable_data with 'a
     type 'a init
 
-    val empty_like : 'a init -> 'a t @ portable
+    val empty_like : 'a init -> 'a t
     val to_length : 'a init -> int
-    val create_for_init : 'a init -> 'a @ portable -> 'a mut @ portable
-    val freeze : 'a mut @ portable -> 'a t @ portable
-    val unsafe_racy_set_contended : 'a mut @ contended -> int -> 'a @ portable -> unit
+    val create : 'a init -> 'a -> 'a mut
+    val freeze : 'a mut -> 'a t
+    val unsafe_racy_set_contended : 'a mut @ contended -> int -> 'a -> unit
   end) =
 struct
   let init_gen ~grain parallel init ~f =
@@ -65,7 +67,8 @@ struct
     | length when length < 0 -> invalid_arg "length < 0"
     | 0 -> Array.empty_like init
     | length ->
-      let output = Array.create_for_init init (f parallel 0) in
+      let first = f parallel 0 in
+      let output = Array.create init first in
       let f parallel i =
         let a = f parallel i in
         Array.unsafe_racy_set_contended output i a
@@ -83,20 +86,19 @@ end
 
 module Make_inplace (Array : sig
   @@ portable
-    type 'a t
-    type 'a mut
+    type ('a : value mod portable unyielding) t : mutable_data with 'a
 
-    val length : 'a t @ contended -> int
-    val freeze : 'a mut @ portable -> 'a t @ portable
-    val copy : 'a t @ portable -> 'a mut @ portable
-    val unsafe_racy_get_contended : 'a t @ contended -> int -> 'a @ contended portable
-    val unsafe_racy_set_contended : 'a t @ contended -> int -> 'a @ portable -> unit
+    val copy : 'a t -> 'a t
+    val length : 'a t @ shared -> int
+    val create_like : 'a t @ shared -> len:int -> 'a -> 'a t
+    val unsafe_racy_get_contended : 'a t @ contended -> int -> 'a @ contended
+    val unsafe_racy_set_contended : 'a t @ contended -> int -> 'a -> unit
   end) =
 struct
   let mapi_inplace_gen ~grain parallel input ~f ~i ~j =
     if grain < 1 then invalid_arg "grain < 1";
     let f parallel i =
-      let a = Array.unsafe_racy_get_contended input i |> magic_uncontended in
+      let a = Array.unsafe_racy_get_contended input i |> Obj.magic_uncontended in
       let b = f parallel i a in
       Array.unsafe_racy_set_contended input i b
     in
@@ -140,13 +142,13 @@ struct
     (* Adapted from [Base.Array.sort]. Uses inclusive bounds. *)
 
     let[@inline] swap input i j =
-      let a = Array.unsafe_racy_get_contended input i |> magic_uncontended in
-      let b = Array.unsafe_racy_get_contended input j |> magic_uncontended in
+      let a = Array.unsafe_racy_get_contended input i |> Obj.magic_uncontended in
+      let b = Array.unsafe_racy_get_contended input j |> Obj.magic_uncontended in
       Array.unsafe_racy_set_contended input i b;
       Array.unsafe_racy_set_contended input j a
     ;;
 
-    let[@inline] [@loop always] rec heapify parallel input ~compare root ~left ~right =
+    let[@inline] [@loop] rec heapify parallel input ~compare root ~left ~right =
       let relative_root = root - left in
       let left_child = (2 * relative_root) + left + 1 in
       let right_child = (2 * relative_root) + left + 2 in
@@ -154,9 +156,11 @@ struct
         if left_child <= right
            &&
            let left_child =
-             Array.unsafe_racy_get_contended input left_child |> magic_uncontended
+             Array.unsafe_racy_get_contended input left_child |> Obj.magic_uncontended
            in
-           let root = Array.unsafe_racy_get_contended input root |> magic_uncontended in
+           let root =
+             Array.unsafe_racy_get_contended input root |> Obj.magic_uncontended
+           in
            compare parallel left_child root > 0
         then left_child
         else root
@@ -165,10 +169,10 @@ struct
         if right_child <= right
            &&
            let right_child =
-             Array.unsafe_racy_get_contended input right_child |> magic_uncontended
+             Array.unsafe_racy_get_contended input right_child |> Obj.magic_uncontended
            in
            let largest =
-             Array.unsafe_racy_get_contended input largest |> magic_uncontended
+             Array.unsafe_racy_get_contended input largest |> Obj.magic_uncontended
            in
            compare parallel right_child largest > 0
         then right_child
@@ -194,14 +198,14 @@ struct
       done
     ;;
 
-    let[@inline] [@loop always] rec insert parallel input ~left ~compare i v =
+    let[@inline] [@loop] rec insert parallel input ~left ~compare i v =
       let i_next = i - 1 in
       if i_next >= left
          &&
-         let a = Array.unsafe_racy_get_contended input i_next |> magic_uncontended in
+         let a = Array.unsafe_racy_get_contended input i_next |> Obj.magic_uncontended in
          compare parallel a v > 0
       then (
-        let a = Array.unsafe_racy_get_contended input i_next |> magic_uncontended in
+        let a = Array.unsafe_racy_get_contended input i_next |> Obj.magic_uncontended in
         Array.unsafe_racy_set_contended input i a;
         insert parallel input ~left ~compare i_next v)
       else i
@@ -209,7 +213,7 @@ struct
 
     let insertion_sort parallel input ~compare ~left ~right =
       for pos = left + 1 to right do
-        let v = Array.unsafe_racy_get_contended input pos |> magic_uncontended in
+        let v = Array.unsafe_racy_get_contended input pos |> Obj.magic_uncontended in
         let final_pos = insert parallel input ~left ~compare pos v in
         Array.unsafe_racy_set_contended input final_pos v
       done
@@ -217,8 +221,8 @@ struct
 
     let[@inline] five_element_sort parallel input ~compare m1 m2 m3 m4 m5 =
       let compare_and_swap i j =
-        let a = Array.unsafe_racy_get_contended input i |> magic_uncontended in
-        let b = Array.unsafe_racy_get_contended input j |> magic_uncontended in
+        let a = Array.unsafe_racy_get_contended input i |> Obj.magic_uncontended in
+        let b = Array.unsafe_racy_get_contended input j |> Obj.magic_uncontended in
         if compare parallel a b > 0 then swap input i j
       in
       compare_and_swap m1 m2;
@@ -240,9 +244,9 @@ struct
       let m4 = m3 + sixth in
       let m5 = m4 + sixth in
       five_element_sort parallel input ~compare m1 m2 m3 m4 m5;
-      let m2_val = Array.unsafe_racy_get_contended input m2 |> magic_uncontended in
-      let m3_val = Array.unsafe_racy_get_contended input m3 |> magic_uncontended in
-      let m4_val = Array.unsafe_racy_get_contended input m4 |> magic_uncontended in
+      let m2_val = Array.unsafe_racy_get_contended input m2 |> Obj.magic_uncontended in
+      let m3_val = Array.unsafe_racy_get_contended input m3 |> Obj.magic_uncontended in
+      let m4_val = Array.unsafe_racy_get_contended input m4 |> Obj.magic_uncontended in
       if compare parallel m2_val m3_val = 0
       then #(m2_val, m3_val, true)
       else if compare parallel m3_val m4_val = 0
@@ -254,18 +258,18 @@ struct
       let #(pivot1, pivot2, pivots_equal) =
         choose_pivots parallel input ~compare ~left ~right
       in
-      let[@loop always] rec loop l p r =
-        let pv = Array.unsafe_racy_get_contended input p |> magic_uncontended in
+      let[@loop] rec loop l p r =
+        let pv = Array.unsafe_racy_get_contended input p |> Obj.magic_uncontended in
         if compare parallel pv pivot1 < 0
         then (
           swap input p l;
           cont (l + 1) (p + 1) r)
         else if compare parallel pv pivot2 > 0
         then (
-          let[@loop always] rec scan_backwards r =
+          let[@loop] rec scan_backwards r =
             if r > p
                &&
-               let a = Array.unsafe_racy_get_contended input r |> magic_uncontended in
+               let a = Array.unsafe_racy_get_contended input r |> Obj.magic_uncontended in
                compare parallel a pivot2 > 0
             then scan_backwards (r - 1)
             else r
@@ -295,7 +299,7 @@ struct
           , mid0 - left >= grain || right - mid1 >= grain || mid1 - mid0 >= grain )
         with
         | true, true ->
-          let (), () =
+          let #((), ()) =
             Parallel_kernel.fork_join2
               parallel
               (fun parallel ->
@@ -305,7 +309,7 @@ struct
           in
           ()
         | false, true ->
-          let (), (), () =
+          let #((), (), ()) =
             Parallel_kernel.fork_join3
               parallel
               (fun parallel ->
@@ -344,12 +348,14 @@ struct
   module Stable_sort = struct
     let[@inline] blit input output ~at ~i ~j =
       for idx = 0 to j - i - 1 do
-        let a = Array.unsafe_racy_get_contended input (i + idx) |> magic_uncontended in
+        let a =
+          Array.unsafe_racy_get_contended input (i + idx) |> Obj.magic_uncontended
+        in
         Array.unsafe_racy_set_contended output (at + idx) a
       done
     ;;
 
-    let[@inline] [@loop always] rec sequential_merge
+    let[@inline] [@loop] rec sequential_merge
       parallel
       ~input
       ~output
@@ -365,8 +371,8 @@ struct
       else if i1 = j1
       then blit input output ~at ~i:i0 ~j:j0
       else (
-        let a = Array.unsafe_racy_get_contended input i0 |> magic_uncontended in
-        let b = Array.unsafe_racy_get_contended input i1 |> magic_uncontended in
+        let a = Array.unsafe_racy_get_contended input i0 |> Obj.magic_uncontended in
+        let b = Array.unsafe_racy_get_contended input i1 |> Obj.magic_uncontended in
         if compare parallel a b <= 0
         then (
           Array.unsafe_racy_set_contended output at a;
@@ -394,15 +400,15 @@ struct
             ~compare))
     ;;
 
-    let[@inline] [@loop always] rec binary_search parallel input ~i ~j a ~compare =
+    let[@inline] [@loop] rec binary_search parallel input ~i ~j a ~compare =
       let n = j - i in
       if n = 1
       then (
-        let b = Array.unsafe_racy_get_contended input i |> magic_uncontended in
+        let b = Array.unsafe_racy_get_contended input i |> Obj.magic_uncontended in
         if compare parallel a b <= 0 then i else j)
       else (
         let pivot = i + (n / 2) in
-        let b = Array.unsafe_racy_get_contended input pivot |> magic_uncontended in
+        let b = Array.unsafe_racy_get_contended input pivot |> Obj.magic_uncontended in
         if compare parallel a b <= 0
         then binary_search parallel input ~i ~j:pivot a ~compare
         else binary_search parallel input ~i:pivot ~j a ~compare)
@@ -425,10 +431,12 @@ struct
       if n0 > 1 && n1 > 1 && (n0 >= grain || n1 >= grain)
       then (
         let pivot0 = i0 + (n0 / 2) in
-        let pivot1 = Array.unsafe_racy_get_contended input pivot0 |> magic_uncontended in
+        let pivot1 =
+          Array.unsafe_racy_get_contended input pivot0 |> Obj.magic_uncontended
+        in
         let pivot1 = binary_search parallel input ~i:i1 ~j:j1 pivot1 ~compare in
         let len = pivot0 - i0 + (pivot1 - i1) in
-        let (), () =
+        let #((), ()) =
           Parallel_kernel.fork_join2
             parallel
             (fun parallel ->
@@ -468,7 +476,7 @@ struct
         let pivot = i + (n / 2) in
         if n / 2 >= grain
         then (
-          let (), () =
+          let #((), ()) =
             Parallel_kernel.fork_join2
               parallel
               (fun parallel ->
@@ -536,7 +544,7 @@ struct
     Stable_sort.sort_inplace_gen
       ~grain
       parallel
-      ~input:(Array.copy input |> Array.freeze)
+      ~input:(Array.copy input)
       ~output:input
       ~i:0
       ~j:(Array.length input)
@@ -547,19 +555,261 @@ struct
     stable_sort_inplace' ~grain parallel input ~compare:(fun _ a b -> compare a b)
     [@nontail]
   ;;
+
+  (** For every pair [l, r] of consecutive elements in the [target] range
+      [\[target_pos, target_pos + 2 * len)], compute [f l r] and write it to the the
+      [scratch] range [\[scratch_pos, scratch_pos + len)]. *)
+  let[@inline] contract parallel ~grain ~target ~target_pos ~len ~scratch ~scratch_pos ~f =
+    let[@inline] contract parallel i =
+      let l =
+        Array.unsafe_racy_get_contended target (target_pos + (2 * i))
+        |> Obj.magic_uncontended
+      in
+      let r =
+        Array.unsafe_racy_get_contended target (target_pos + (2 * i) + 1)
+        |> Obj.magic_uncontended
+      in
+      Array.unsafe_racy_set_contended scratch (scratch_pos + i) (f parallel l r)
+    in
+    Parallel_kernel.for_ ~grain parallel ~start:0 ~stop:len ~f:contract [@nontail]
+  ;;
+
+  (** At this point, the element at index [i] in the [scratch] range
+      [\[scratch_pos, scratch_pos + len)] represents the prefix sum of the [target] range
+      [\[target_pos, target_pos + target_offset + 2 * i)]. We copy it to the index
+      [target_pos + target_offset + 2 * i] in the [target] range, then fold it with the
+      following element and write the result to the following index. *)
+  let[@inline] expand
+    parallel
+    ~grain
+    ~target
+    ~target_pos
+    ~target_offset
+    ~len
+    ~scratch
+    ~scratch_pos
+    ~f
+    =
+    let[@inline] expand parallel i =
+      let contracted_elem =
+        Array.unsafe_racy_get_contended scratch (scratch_pos + i) |> Obj.magic_uncontended
+      in
+      let to_fold =
+        Array.unsafe_racy_get_contended target (target_pos + target_offset + (2 * i))
+        |> Obj.magic_uncontended
+      in
+      Array.unsafe_racy_set_contended target (target_pos + (2 * i)) contracted_elem;
+      Array.unsafe_racy_set_contended
+        target
+        (target_pos + (2 * i) + 1)
+        (f parallel contracted_elem to_fold)
+    in
+    Parallel_kernel.for_ ~grain parallel ~start:0 ~stop:len ~f:expand [@nontail]
+  ;;
+
+  (** This computes the exclusive prefix sums of the [target] range
+      [\[target_pos, target_pos + len)] in-place, using the [scratch] range
+      [\[scratch_pos, scratch_pos + len / 2)] as scratch space. [target] and [scratch] may
+      refer to the same array, as long as the aforementioned ranges do not overlap.
+
+      First, we [contract] the [target] range into the [scratch] range, effectively
+      halving the number of elements to consider. Then, we recursively compute the
+      exclusive prefix sums of the [scratch] range. Finally, we copy the elements of the
+      [scratch] range back to the even indices of the [target] range, and recover the odd
+      indices of the [target] range by applying [f] to the prefix sum at the preceding
+      even index and the original element at the odd index. *)
+  let rec scan_inplace_gen'
+    ?(grain = 16)
+    parallel
+    ~target
+    ~target_pos
+    ~len
+    ~scratch
+    ~scratch_pos
+    ~init
+    ~f
+    =
+    match len with
+    | 0 -> init
+    | 1 ->
+      let first =
+        Array.unsafe_racy_get_contended target target_pos |> Obj.magic_uncontended
+      in
+      Array.unsafe_racy_set_contended target target_pos init;
+      first
+    | len ->
+      let contracted_len = len / 2 in
+      contract
+        parallel
+        ~grain
+        ~target
+        ~target_pos
+        ~len:contracted_len
+        ~scratch
+        ~scratch_pos
+        ~f;
+      let partial_result =
+        scan_inplace_gen'
+          ~grain
+          parallel
+          ~target:scratch
+          ~target_pos:scratch_pos
+          ~len:contracted_len
+          ~scratch
+          ~scratch_pos:(scratch_pos + contracted_len)
+          ~init
+          ~f
+      in
+      expand
+        parallel
+        ~grain
+        ~target
+        ~target_pos
+        ~target_offset:0
+        ~len:contracted_len
+        ~scratch
+        ~scratch_pos
+        ~f;
+      (* Account for last element of an odd length input, which does not get contracted. *)
+      if len land 1 = 1
+      then (
+        let last =
+          Array.unsafe_racy_get_contended target (target_pos + len - 1)
+          |> Obj.magic_uncontended
+        in
+        Array.unsafe_racy_set_contended target (target_pos + len - 1) partial_result;
+        f parallel partial_result last)
+      else partial_result
+  ;;
+
+  let[@inline] scan_inplace' ?(grain = 16) parallel input ~init ~f =
+    let len = Array.length input in
+    let scratch = Array.create_like input ~len init in
+    scan_inplace_gen'
+      ~grain
+      parallel
+      ~target:input
+      ~target_pos:0
+      ~len
+      ~scratch
+      ~scratch_pos:0
+      ~init
+      ~f
+  ;;
+
+  let[@inline] scan_inplace ?(grain = 16) parallel input ~init ~f =
+    scan_inplace' ~grain parallel input ~init ~f:(fun _ a b -> f a b) [@nontail]
+  ;;
+
+  (** This algorithm is similar to [scan_inplace_gen'] but with indices offset by 1. *)
+  let rec scan_inclusive_inplace_gen'
+    ?(grain = 16)
+    parallel
+    ~target
+    ~target_pos
+    ~len
+    ~scratch
+    ~scratch_pos
+    ~init
+    ~f
+    =
+    if len <= 1
+    then ()
+    else (
+      let contracted_len = len / 2 in
+      contract
+        ~grain
+        parallel
+        ~target
+        ~target_pos
+        ~len:contracted_len
+        ~scratch
+        ~scratch_pos
+        ~f;
+      scan_inclusive_inplace_gen'
+        ~grain
+        parallel
+        ~target:scratch
+        ~target_pos:scratch_pos
+        ~len:contracted_len
+        ~scratch
+        ~scratch_pos:(scratch_pos + contracted_len)
+        ~init
+        ~f;
+      expand
+        parallel
+        ~grain
+        ~target
+        ~target_pos:(target_pos + 1)
+        ~target_offset:1
+        ~len:(contracted_len - 1)
+        ~scratch
+        ~scratch_pos
+        ~f;
+      (* Need to special-case the first and last elements, since contracted index [i] is
+         used to derive expanded indices [2*i + 1] and [2*i + 2]. Note the first element
+         remains unchanged. *)
+      let contracted_last =
+        Array.unsafe_racy_get_contended scratch (scratch_pos + contracted_len - 1)
+        |> Obj.magic_uncontended
+      in
+      Array.unsafe_racy_set_contended
+        target
+        (target_pos + (2 * contracted_len) - 1)
+        contracted_last;
+      if len land 1 = 1
+      then (
+        let target_last =
+          Array.unsafe_racy_get_contended target (target_pos + len - 1)
+          |> Obj.magic_uncontended
+        in
+        Array.unsafe_racy_set_contended
+          target
+          (target_pos + len - 1)
+          (f parallel contracted_last target_last)))
+  ;;
+
+  let[@inline] scan_inclusive_inplace' ?(grain = 16) parallel input ~init ~f =
+    let len = Array.length input in
+    let scratch = Array.create_like input ~len init in
+    scan_inclusive_inplace_gen'
+      ~grain
+      parallel
+      ~target:input
+      ~target_pos:0
+      ~len
+      ~scratch
+      ~scratch_pos:0
+      ~init
+      ~f
+  ;;
+
+  let[@inline] scan_inclusive_inplace ?(grain = 16) parallel input ~init ~f =
+    scan_inclusive_inplace' ~grain parallel input ~init ~f:(fun _ a b -> f a b) [@nontail]
+  ;;
 end
 
-module Make_map (Array : sig
+module%template Make_map (Array : sig
   @@ portable
-    type 'a t
-    type 'a mut
+    type ('a : k mod portable unyielding) t
+    type ('a : k mod portable unyielding) mut : mutable_data with 'a
 
-    val empty : unit -> 'a t @ portable
-    val length : 'a t @ contended -> int
-    val freeze : 'a mut @ portable -> 'a t @ portable
-    val create_for_map : _ t @ portable shared -> 'a @ portable -> 'a mut @ portable
-    val unsafe_racy_get_contended : 'a t @ contended -> int -> 'a @ contended portable
-    val unsafe_racy_set_contended : 'a mut @ contended -> int -> 'a @ portable -> unit
+    val empty : ('a : k mod portable unyielding). unit -> 'a t
+    val length : ('a : k mod portable unyielding). 'a t @ shared -> int
+
+    val create_like
+      : ('a : k mod portable unyielding).
+      _ t @ shared -> len:int -> 'a -> 'a mut
+
+    val freeze : ('a : k mod portable unyielding). 'a mut -> 'a t
+
+    val unsafe_racy_get_contended
+      : ('a : k mod portable unyielding).
+      'a t @ contended -> int -> 'a @ contended
+
+    val unsafe_racy_set_contended
+      : ('a : k mod portable unyielding).
+      'a mut @ contended -> int -> 'a -> unit
   end) =
 struct
   let mapi_gen ~grain parallel input ~f =
@@ -568,10 +818,13 @@ struct
     if length = 0
     then Array.empty ()
     else (
-      let first = Array.unsafe_racy_get_contended input 0 |> magic_uncontended in
-      let output = Array.create_for_map input (f parallel 0 first) in
+      let first =
+        let first = Array.unsafe_racy_get_contended input 0 |> Obj.magic_uncontended in
+        f parallel 0 first
+      in
+      let output = Array.create_like input ~len:length first in
       let f parallel i =
-        let a = Array.unsafe_racy_get_contended input i |> magic_uncontended in
+        let a = Array.unsafe_racy_get_contended input i |> Obj.magic_uncontended in
         let b = f parallel i a in
         Array.unsafe_racy_set_contended output i b
       in
@@ -604,16 +857,19 @@ struct
     if length0 = 0
     then Array.empty ()
     else (
-      let a = Array.unsafe_racy_get_contended input0 0 |> magic_uncontended in
-      let b = Array.unsafe_racy_get_contended input1 0 |> magic_uncontended in
-      let output = Array.create_for_map input0 (f parallel 0 a b) in
+      let first =
+        let a = Array.unsafe_racy_get_contended input0 0 |> Obj.magic_uncontended in
+        let b = Array.unsafe_racy_get_contended input1 0 |> Obj.magic_uncontended in
+        f parallel 0 a b
+      in
+      let output = Array.create_like input0 ~len:length0 first in
       let f parallel i =
-        let a = Array.unsafe_racy_get_contended input0 i |> magic_uncontended in
-        let b = Array.unsafe_racy_get_contended input1 i |> magic_uncontended in
+        let a = Array.unsafe_racy_get_contended input0 i |> Obj.magic_uncontended in
+        let b = Array.unsafe_racy_get_contended input1 i |> Obj.magic_uncontended in
         let c = f parallel i a b in
         Array.unsafe_racy_set_contended output i c
       in
-      Parallel_kernel.for_ ~grain parallel ~start:0 ~stop:length0 ~f;
+      Parallel_kernel.for_ ~grain parallel ~start:1 ~stop:length0 ~f;
       Array.freeze output)
   ;;
 
@@ -640,19 +896,20 @@ struct
     [@nontail]
   ;;]
 end
+[@@kind k = (value, value_or_null mod separable)]
 
 module Make_reduce (Array : sig
   @@ portable
-    type 'a t
+    type ('a : value mod portable unyielding) t
 
-    val length : 'a t @ contended -> int
-    val unsafe_racy_get_contended : 'a t @ contended -> int -> 'a @ contended portable
+    val length : 'a t @ shared -> int
+    val unsafe_racy_get_contended : 'a t @ contended -> int -> 'a @ contended
   end) =
 struct
   let iteri_gen ~grain parallel input ~f =
     if grain < 1 then invalid_arg "grain < 1";
     let f parallel i =
-      let a = Array.unsafe_racy_get_contended input i |> magic_uncontended in
+      let a = Array.unsafe_racy_get_contended input i |> Obj.magic_uncontended in
       f parallel i a
     in
     Parallel_kernel.for_ ~grain parallel ~start:0 ~stop:(Array.length input) ~f [@nontail]
@@ -679,13 +936,15 @@ struct
     Parallel_kernel.fold
       ~grain
       parallel
-      ~init:#(init, (~i, ~j))
+      ~init
+      ~state:((~i, ~j) : i:int * j:int)
       ~next:(fun parallel acc (~i, ~j) ->
         if i = j
         then Pair_or_null.none ()
         else (
-          let a = Array.unsafe_racy_get_contended input i |> magic_uncontended in
+          let a = Array.unsafe_racy_get_contended input i |> Obj.magic_uncontended in
           Pair_or_null.some (f parallel i acc a) (~i:(i + 1), ~j)))
+      ~stop:(fun _ acc -> acc)
       ~fork:(fun _ (~i, ~j) -> split ~grain ~i ~j)
       ~join:combine [@nontail]
   ;;
@@ -728,18 +987,18 @@ struct
       ~combine:(fun _ a b -> combine a b) [@nontail]
   ;;]
 
-  let[@inline] reduce' ?(grain = 16) parallel input ~f =
+  let[@inline] reduce' ?(grain = 16) parallel (input : 'a Array.t) ~f =
     foldi'
       ~grain
       parallel
       input
-      ~init:None
+      ~init:(fun () : 'a option -> None)
       ~f:(fun parallel _ acc a ->
         match acc with
         | Some acc -> Some (f parallel acc a)
         | None -> Some a)
       ~combine:(fun parallel a b ->
-        Option.merge_portable_contended ~f:(fun a b -> f parallel a b) a b [@nontail])
+        Option.merge ~f:(fun a b -> f parallel a b) a b [@nontail])
   ;;
 
   let[@inline] reduce ?(grain = 16) parallel input ~f =
@@ -749,17 +1008,17 @@ struct
   [%%template
   [@@@mode.default m = (uncontended, shared)]
 
-  let[@inline] findi' ?(grain = 16) parallel t ~f =
+  let[@inline] findi' ?(grain = 16) parallel (t : 'a Array.t) ~f =
     (foldi' [@mode m])
       ~grain
       parallel
       t
-      ~init:None
+      ~init:(fun () : 'a option -> None)
       ~f:(fun parallel i acc a ->
         match acc with
         | Some _ -> acc
         | None -> if f parallel i a then Some a else None)
-      ~combine:(fun _ a b -> Option.first_some_portable_contended a b) [@nontail]
+      ~combine:(fun _ a b -> Option.first_some a b) [@nontail]
   ;;
 
   let[@inline] findi ?(grain = 16) parallel t ~f =
@@ -777,31 +1036,31 @@ end
 
 module Make_sort (Array : sig
   @@ portable
-    type 'a t
-    type 'a mut
+    type ('a : value mod portable unyielding) t
+    type ('a : value mod portable unyielding) mut : mutable_data with 'a
 
     [%%template:
     [@@@mode.default m = (uncontended, shared)]
 
-    val wrap : 'a mut @ m portable -> ('a modality[@mode m]) mut @ m portable
-    val unwrap : ('a modality[@mode m]) mut @ m portable -> 'a mut @ m portable
-    val copy : 'a t @ m portable -> 'a mut @ m portable
-    val freeze : 'a mut @ m portable -> 'a t @ m portable]
+    val wrap : 'a mut @ m -> ('a modality[@mode m]) mut @ m
+    val unwrap : ('a modality[@mode m]) mut @ m -> 'a mut @ m
+    val copy : 'a t @ m -> 'a mut @ m
+    val freeze : 'a mut @ m -> 'a t @ m]
 
     val sort_inplace'
       :  ?grain:int
       -> Parallel_kernel.t @ local
-      -> 'a mut @ portable
-      -> compare:(Parallel_kernel.t @ local -> 'a @ portable -> 'a @ portable -> int)
-         @ portable
+      -> 'a mut
+      -> compare:(Parallel_kernel.t @ local -> 'a @ local -> 'a @ local -> int)
+         @ portable unyielding
       -> unit
 
     val stable_sort_inplace'
       :  ?grain:int
       -> Parallel_kernel.t @ local
-      -> 'a mut @ portable
-      -> compare:(Parallel_kernel.t @ local -> 'a @ portable -> 'a @ portable -> int)
-         @ portable
+      -> 'a mut
+      -> compare:(Parallel_kernel.t @ local -> 'a @ local -> 'a @ local -> int)
+         @ portable unyielding
       -> unit
   end) =
 struct
@@ -813,7 +1072,7 @@ struct
        However, it contains elements which might be [shared], so we first [wrap] them in a
        [shared] modality (if necessary), and then [magic_uncontended] the whole array. *)
     let output =
-      (Array.copy [@mode m]) input |> (Array.wrap [@mode m]) |> magic_uncontended
+      (Array.copy [@mode m]) input |> (Array.wrap [@mode m]) |> Obj.magic_uncontended
     in
     Array.sort_inplace'
       ~grain
@@ -832,7 +1091,7 @@ struct
        However, it contains elements which might be [shared], so we first [wrap] them in a
        [shared] modality (if necessary), and then [magic_uncontended] the whole array. *)
     let output =
-      (Array.copy [@mode m]) input |> (Array.wrap [@mode m]) |> magic_uncontended
+      (Array.copy [@mode m]) input |> (Array.wrap [@mode m]) |> Obj.magic_uncontended
     in
     Array.stable_sort_inplace'
       ~grain
@@ -848,21 +1107,349 @@ struct
   ;;]
 end
 
+module Make_scan (Array : sig
+  @@ portable
+    type ('a : value mod portable unyielding) t
+    type ('a : value mod portable unyielding) mut : mutable_data with 'a
+
+    val scan_inplace'
+      :  ?grain:int
+      -> Parallel_kernel.t @ local
+      -> 'a mut
+      -> init:'a
+      -> f:(Parallel_kernel.t @ local -> 'a -> 'a -> 'a) @ portable unyielding
+      -> 'a
+
+    val scan_inclusive_inplace'
+      :  ?grain:int
+      -> Parallel_kernel.t @ local
+      -> 'a mut
+      -> init:'a
+      -> f:(Parallel_kernel.t @ local -> 'a -> 'a -> 'a) @ portable unyielding
+      -> unit
+
+    [%%template:
+    [@@@mode.default m = (uncontended, shared)]
+
+    val wrap : 'a mut @ m -> ('a modality[@mode m]) mut @ m
+    val unwrap : ('a modality[@mode m]) mut @ m -> 'a mut @ m
+    val copy : 'a t @ m -> 'a mut @ m
+    val freeze : 'a mut @ m -> 'a t @ m]
+  end) =
+struct
+  [%%template
+  [@@@mode.default m = (uncontended, shared)]
+
+  let scan' ?(grain = 16) parallel input ~init ~f =
+    let output =
+      (Array.copy [@mode m]) input |> (Array.wrap [@mode m]) |> Obj.magic_uncontended
+    in
+    let result =
+      Array.scan_inplace'
+        ~grain
+        parallel
+        output
+        ~init:{ modality = init }
+        ~f:(fun parallel { modality = a } { modality = b } ->
+          { modality = f parallel a b })
+    in
+    (Array.unwrap [@mode m]) output |> (Array.freeze [@mode m]), result.modality
+  ;;
+
+  let[@inline] scan ?(grain = 16) parallel input ~init ~f =
+    (scan' [@mode m]) ~grain parallel input ~init ~f:(fun _ a b -> f a b) [@nontail]
+  ;;
+
+  let scan_inclusive' ?(grain = 16) parallel input ~init ~f =
+    let output =
+      (Array.copy [@mode m]) input |> (Array.wrap [@mode m]) |> Obj.magic_uncontended
+    in
+    Array.scan_inclusive_inplace'
+      ~grain
+      parallel
+      output
+      ~init:{ modality = init }
+      ~f:(fun parallel { modality = a } { modality = b } -> { modality = f parallel a b });
+    (Array.unwrap [@mode m]) output |> (Array.freeze [@mode m])
+  ;;
+
+  let[@inline] scan_inclusive ?(grain = 16) parallel input ~init ~f =
+    (scan_inclusive' [@mode m]) ~grain parallel input ~init ~f:(fun _ a b -> f a b)
+    [@nontail]
+  ;;]
+end
+
+module Bigstring0 = struct
+  include Bigstring
+
+  type 'a mut = 'a t
+  type 'a init = 'a Kind.t * int
+
+  let unsafe_racy_get_contended = Expert.unsafe_racy_get_contended
+  let unsafe_racy_set_contended = Expert.unsafe_racy_set_contended
+
+  let create (kind, n) a =
+    let bigstring = Bigstring.create kind n in
+    unsafe_racy_set_contended bigstring 0 a;
+    bigstring
+  ;;
+
+  let create_like t ~len a = create (kind t, len) a
+
+  [%%template
+  [@@@mode.default m = (uncontended, shared)]
+
+  external wrap
+    :  'a t @ m portable
+    -> ('a modality[@mode m]) t @ m portable
+    @@ portable
+    = "%identity"
+
+  external unwrap
+    :  ('a modality[@mode m]) t @ m portable
+    -> 'a t @ m portable
+    @@ portable
+    = "%identity"
+
+  let freeze t = t]
+
+  let to_length (_, n) = n
+  let empty_like (kind, _) = empty kind
+
+  include functor Make_inplace
+  include functor Make_init
+  include functor Make_scan
+end
+
+module%template Ints = struct
+  module type S = sig @@ portable
+    type t : immutable_data
+
+    val zero : t
+    val one : t
+    val max_int : int
+    val not_eq : t -> t -> bool
+    val to_int_exn : t -> int
+    val add : t -> t -> t
+  end
+
+  module I8 : S with type t = Int_repr.int8 = struct
+    open Int_repr
+
+    type t = int8
+
+    let zero = Int8.zero
+    let one = Int8.of_base_int_exn 1
+    let max_int = Int8.(to_base_int max_value)
+    let not_eq = Int8.( <> )
+    let to_int_exn = Int8.to_base_int
+    let add = Int8.O.Wrap.( + )
+  end
+
+  module I16 : S with type t = Int_repr.int16 = struct
+    open Int_repr
+
+    type t = int16
+
+    let zero = Int16.zero
+    let one = Int16.of_base_int_exn 1
+    let max_int = Int16.(to_base_int max_value)
+    let not_eq = Int16.( <> )
+    let to_int_exn = Int16.to_base_int
+    let add = Int16.O.Wrap.( + )
+  end
+
+  module I32 : S with type t = int32 = struct
+    type t = int32
+
+    let zero = 0l
+    let one = 1l
+    let max_int = Int32.max_value |> Int32.to_int_exn
+    let not_eq = Int32.( <> )
+    let to_int_exn = Int32.to_int_exn
+    let add = [%eta2 Int32.( + )]
+  end
+
+  module I64 : S with type t = int64 = struct
+    type t = int64
+
+    let zero = 0L
+    let one = 1L
+    let max_int = Int.max_value
+    let not_eq = Int64.( <> )
+    let to_int_exn = Int64.to_int_exn
+    let add = [%eta2 Int64.( + )]
+  end
+end
+
+module%template Make_filter (Array : sig
+  @@ portable
+    type ('a : k mod portable unyielding) t
+    type ('a : k mod portable unyielding) mut : mutable_data with 'a
+
+    val length : ('a : k mod portable unyielding). 'a t @ shared -> int
+
+    val create_like
+      : ('a : k mod portable unyielding).
+      'a t @ shared -> len:int -> 'a -> 'a mut
+
+    val freeze : ('a : k mod portable unyielding). 'a mut -> 'a t
+
+    val unsafe_racy_get_contended
+      : ('a : k mod portable unyielding).
+      'a t @ contended -> int -> 'a @ contended
+
+    val unsafe_racy_set_contended
+      : ('a : k mod portable unyielding).
+      'a mut @ contended -> int -> 'a -> unit
+  end) =
+struct
+  [%%template
+  [@@@mode.default m = (uncontended, shared)]
+
+  let[@inline] filteri_gen
+    (type int : immutable_data)
+    (module Int : Ints.S with type t = int)
+    ~kind
+    ~grain
+    parallel
+    input
+    ~f
+    =
+    let length = Array.length input in
+    (* Create 1/0 array for elements to be kept *)
+    let keep =
+      Bigstring0.init' ~grain parallel (kind, length) ~f:(fun parallel i ->
+        let input_i = Array.unsafe_racy_get_contended input i |> Obj.magic_uncontended in
+        Bool.select (f parallel i input_i) Int.one Int.zero)
+    in
+    (* Determine target index for each element *)
+    let filter_len =
+      Bigstring0.scan_inplace ~grain parallel keep ~init:Int.zero ~f:Int.add
+    in
+    let output =
+      Array.create_like
+        input
+        ~len:(Int.to_int_exn filter_len)
+        (Array.unsafe_racy_get_contended input 0 |> Obj.magic_uncontended)
+    in
+    (* For each element, move it into output if it is kept *)
+    Parallel_kernel.for_ ~grain parallel ~start:0 ~stop:(length - 1) ~f:(fun _ i ->
+      let keep_i = Bigstring0.unsafe_racy_get_contended keep i in
+      let keep_next = Bigstring0.unsafe_racy_get_contended keep (i + 1) in
+      if Int.not_eq keep_i keep_next
+      then (
+        let input_i = Array.unsafe_racy_get_contended input i |> Obj.magic_uncontended in
+        Array.unsafe_racy_set_contended output (Int.to_int_exn keep_i) input_i));
+    if Int.not_eq filter_len (Bigstring0.unsafe_get keep (length - 1))
+    then
+      Array.unsafe_racy_set_contended
+        output
+        (Int.to_int_exn filter_len - 1)
+        (Array.unsafe_racy_get_contended input (length - 1) |> Obj.magic_uncontended);
+    Array.freeze output
+  ;;
+
+  let filteri' ?(grain = 16) parallel input ~f =
+    let length = Array.length input in
+    if length = 0
+    then input
+    else if length <= Ints.I8.max_int
+    then (filteri_gen [@mode m]) (module Ints.I8) ~kind:Int8 ~grain parallel input ~f
+    else if length <= Ints.I16.max_int
+    then (filteri_gen [@mode m]) (module Ints.I16) ~kind:Int16 ~grain parallel input ~f
+    else if length <= Ints.I32.max_int
+    then (filteri_gen [@mode m]) (module Ints.I32) ~kind:Int32 ~grain parallel input ~f
+    else (filteri_gen [@mode m]) (module Ints.I64) ~kind:Int64 ~grain parallel input ~f
+  ;;
+
+  let[@inline] filteri ?(grain = 16) parallel input ~f =
+    (filteri' [@mode m]) ~grain parallel input ~f:(fun _ i a -> f i a) [@nontail]
+  ;;
+
+  let[@inline] filter' ?(grain = 16) parallel input ~f =
+    (filteri' [@mode m]) ~grain parallel input ~f:(fun parallel _ a -> f parallel a)
+    [@nontail]
+  ;;
+
+  let[@inline] filter ?(grain = 16) parallel input ~f =
+    (filter' [@mode m]) ~grain parallel input ~f:(fun _ a -> f a) [@nontail]
+  ;;]
+end
+[@@kind k = (value, value_or_null mod separable)]
+
+module Make_filter_map (Array : sig
+  @@ portable
+    type ('a : value_or_null mod portable separable unyielding) t
+
+    [%%template:
+    [@@@mode.default m = (uncontended, shared)]
+
+    val mapi'
+      : ('b : value_or_null mod portable separable unyielding).
+      ?grain:int
+      -> Parallel_kernel.t @ local
+      -> 'a t @ m
+      -> f:(Parallel_kernel.t @ local -> int -> 'a @ m -> 'b) @ portable unyielding
+      -> 'b t
+
+    val filter
+      : ('a : value_or_null mod portable separable unyielding).
+      ?grain:int
+      -> Parallel_kernel.t @ local
+      -> 'a t @ m
+      -> f:('a @ m -> bool) @ portable unyielding
+      -> 'a t @ m]
+  end) =
+struct
+  (* There must be no [Null] elements. *)
+  external unsafe_unwrap : 'a or_null Array.t -> 'a Array.t @@ portable = "%obj_magic"
+
+  [%%template
+  [@@@mode.default m = (uncontended, shared)]
+
+  let filter_mapi' ?(grain = 16) parallel input ~f =
+    let output = (Array.mapi' [@mode m]) ~grain parallel input ~f in
+    Array.filter ~grain parallel output ~f:Or_null.is_this |> unsafe_unwrap
+  ;;
+
+  let[@inline] filter_mapi ?(grain = 16) parallel input ~f =
+    (filter_mapi' [@mode m]) ~grain parallel input ~f:(fun _ i a -> f i a) [@nontail]
+  ;;
+
+  let[@inline] filter_map' ?(grain = 16) parallel input ~f =
+    (filter_mapi' [@mode m]) ~grain parallel input ~f:(fun parallel _ a -> f parallel a)
+    [@nontail]
+  ;;
+
+  let[@inline] filter_map ?(grain = 16) parallel input ~f =
+    (filter_map' [@mode m]) ~grain parallel input ~f:(fun _ a -> f a) [@nontail]
+  ;;]
+end
+
 module%template Make_slice (Array : sig
   @@ portable
-    type 'a t : k with 'a portable
+    type ('a : value mod portable unyielding) t : k with 'a
 
-    val length : 'a t @ contended -> int
-    val unsafe_racy_get_contended : 'a t @ contended -> int -> 'a @ contended portable
+    val length : 'a t @ shared -> int
+    val unsafe_racy_get_contended : 'a t @ contended -> int -> 'a @ contended
   end) =
 struct
   type 'a t =
-    { array : 'a Array.t @@ contended global portable
+    { array : 'a Array.t @@ contended global
     ; start : int
     ; stop : int
     }
 
   let length { start; stop; _ } = stop - start
+
+  let check_pivots pivots ~len =
+    Iarray.fold pivots ~init:0 ~f:(fun acc pivot ->
+      if pivot < 0 || pivot > len then invalid_arg "index out of bounds";
+      if pivot < acc then invalid_arg "pivots must be non-decreasing";
+      pivot)
+    |> (ignore : int -> unit)
+  ;;
 
   [@@@mode.default m = (uncontended, shared)]
 
@@ -882,20 +1469,20 @@ struct
     { array = t.array; start = t.start + i; stop = t.start + j }
   ;;
 
-  let get { array; start; stop } i =
+  let[@inline] get { array; start; stop } i =
     if i < 0 || i >= stop - start then invalid_arg "index out of bounds";
-    let a = Array.unsafe_racy_get_contended array (start + i) |> magic_uncontended in
-    a
+    Array.unsafe_racy_get_contended array (start + i) |> Obj.magic_uncontended
   ;;
 
-  let unsafe_get { array; start; _ } i =
-    let a = Array.unsafe_racy_get_contended array (start + i) |> magic_uncontended in
-    a
+  let[@inline] unsafe_get { array; start; _ } i =
+    Array.unsafe_racy_get_contended array (start + i) |> Obj.magic_uncontended
   ;;
+
+  let[@inline] get' t i f = f ((get [@mode m]) t i)
+  let[@inline] unsafe_get' t i f = f ((unsafe_get [@mode m]) t i)
 
   let fork_join2 parallel ?pivot { array; start; stop } f1 f2 =
     let len = stop - start in
-    if len = 0 then invalid_arg "empty slice";
     let pivot = Option.value pivot ~default:(len / 2) in
     if pivot < 0 || pivot > len then invalid_arg "index out of bounds";
     Parallel_kernel.fork_join2
@@ -903,15 +1490,31 @@ struct
       (fun parallel -> f1 parallel { array; start; stop = start + pivot })
       (fun parallel -> f2 parallel { array; start = start + pivot; stop }) [@nontail]
   ;;
+
+  let fori parallel ~pivots { array; start; stop } ~f =
+    let len = stop - start in
+    check_pivots pivots ~len;
+    let num_pivots = Iarray.length pivots in
+    Parallel_kernel.for_ parallel ~start:0 ~stop:(num_pivots + 1) ~f:(fun parallel i ->
+      let start' = if i = 0 then start else start + Iarray.get pivots (i - 1) in
+      let stop' = if i = num_pivots then stop else start + Iarray.get pivots i in
+      f parallel i { array; start = start'; stop = stop' })
+    [@nontail]
+  ;;
+
+  let[@inline] for_ parallel ~pivots slice ~f =
+    fori parallel ~pivots slice ~f:(fun parallel _ subslice -> f parallel subslice)
+    [@nontail]
+  ;;
 end
 [@@kind k = (mutable_data, immutable_data)]
 
 module Make_islice (Array : sig
   @@ portable
-    type 'a t : immutable_data with 'a portable
+    type ('a : value mod portable unyielding) t : immutable_data with 'a
 
-    val length : 'a t @ contended -> int
-    val unsafe_racy_get_contended : 'a t @ contended -> int -> 'a @ contended portable
+    val length : 'a t @ shared -> int
+    val unsafe_racy_get_contended : 'a t @ contended -> int -> 'a @ contended
   end) =
 struct
   module%template Slice = Make_slice [@kind immutable_data] (Array)
@@ -919,11 +1522,11 @@ end
 
 module Make_slice (Array : sig
   @@ portable
-    type 'a t : mutable_data with 'a portable
+    type ('a : value mod portable unyielding) t : mutable_data with 'a
 
-    val length : 'a t @ contended -> int
-    val unsafe_racy_get_contended : 'a t @ contended -> int -> 'a @ contended portable
-    val unsafe_racy_set_contended : 'a t @ contended -> int -> 'a @ portable -> unit
+    val length : 'a t @ shared -> int
+    val unsafe_racy_get_contended : 'a t @ contended -> int -> 'a @ contended
+    val unsafe_racy_set_contended : 'a t @ contended -> int -> 'a -> unit
   end) =
 struct
   module%template Islice = Make_slice [@kind mutable_data] (Array)
@@ -948,86 +1551,70 @@ end
 module Array = struct
   include Array
 
-  type nonrec 'a t = 'a portable t
+  type nonrec ('a : any) t = 'a t
+  type ('a : any) mut = 'a t
   type 'a init = int
-  type 'a mut = 'a t
-
-  let[@inline] unsafe_racy_get_contended t i = (unsafe_racy_get_contended t i).portable
-
-  let[@inline] unsafe_racy_set_contended t i a =
-    unsafe_racy_set_contended t i { portable = a }
-  ;;
 
   [%%template
   [@@@mode.default m = (uncontended, shared)]
 
-  external wrap
-    :  'a t @ m portable
-    -> ('a modality[@mode m]) t @ m portable
-    @@ portable
-    = "%identity"
-
-  external unwrap
-    :  ('a modality[@mode m]) t @ m portable
-    -> 'a t @ m portable
-    @@ portable
-    = "%identity"
+  external wrap : 'a t @ m -> ('a modality[@mode m]) t @ m @@ portable = "%identity"
+  external unwrap : ('a modality[@mode m]) t @ m -> 'a t @ m @@ portable = "%identity"
 
   external of_array
-    : ('a : value mod contended portable).
-    'a array @ m -> 'a portable array @ m
+    : ('a : value mod contended portable unyielding).
+    'a array @ m -> 'a array @ m
     @@ portable
     = "%identity"
 
   external to_array
-    : ('a : value mod contended portable).
-    'a portable array @ m -> 'a array @ m
+    : ('a : value mod contended portable unyielding).
+    'a array @ m -> 'a array @ m
     @@ portable
     = "%identity"
 
   let[@inline] freeze mut = mut
-  let[@inline] get t i = ((get [@mode m]) t i).portable
-  let[@inline] unsafe_get t i = ((unsafe_get [@mode m]) t i).portable]
+  let[@inline] get' t i f = f ((get [@mode m]) t i)
+  let[@inline] unsafe_get' t i f = f ((unsafe_get [@mode m]) t i)]
 
-  let[@inline] set t i a = set t i { portable = a }
-  let[@inline] unsafe_set t i a = unsafe_set t i { portable = a }
   let[@inline] set' t i f = set t i (f ())
   let[@inline] unsafe_set' t i f = unsafe_set t i (f ())
   let[@inline] to_length init = init
-  let[@inline] create_for_init n a = create ~len:n { portable = a }
-  let[@inline] create_for_map t a = create ~len:(length t) { portable = a }
+  let[@inline] create n a = create ~len:n a
+  let[@inline] create_like _ ~len a = create len a
+  let[@inline] empty () = [||]
   let[@inline] empty_like _ = empty ()
 
   include functor Make_slice
   include functor Make_init
   include functor Make_inplace
-  include functor Make_map
   include functor Make_reduce
   include functor Make_sort
+  include functor Make_scan
+  include functor Make_map [@kind value_or_null mod separable]
+  include functor Make_filter [@kind value_or_null mod separable]
+  include functor Make_filter_map
 end
 
 module Iarray = struct
   include Iarray
 
-  type nonrec 'a t = 'a portable t
+  type nonrec 'a t = 'a t
   type 'a init = int
-  type 'a mut = 'a portable array
-
-  let[@inline] unsafe_racy_get_contended t i = (unsafe_racy_get_contended t i).portable
-  let unsafe_racy_set_contended = Array.unsafe_racy_set_contended
+  type 'a mut = 'a array
 
   [%%template
   [@@@mode.default m = (uncontended, shared)]
 
   external of_iarray
-    : ('a : value mod contended portable).
-    'a iarray @ m -> 'a portable iarray @ m
+    : ('a : value mod contended portable unyielding).
+    'a iarray @ m -> 'a iarray @ m
     @@ portable
     = "%identity"
 
   external to_iarray
-    : ('a : value mod contended portable).
-    'a portable iarray @ m -> 'a iarray @ m
+    : ('a : value mod contended portable unyielding).
+    'a iarray @ m -> 'a iarray @ m
     @@ portable
     = "%identity"
 
@@ -1039,126 +1626,107 @@ module Iarray = struct
   ;;
 
   let freeze = (unsafe_of_array__promise_no_mutation [@mode m])
-  let[@inline] get t i = ((get [@mode m]) t i).portable
-  let[@inline] unsafe_get t i = ((unsafe_get [@mode m]) t i).portable]
+  let[@inline] get' t i f = f ((get [@mode m]) t i)
+  let[@inline] unsafe_get' t i f = f ((unsafe_get [@mode m]) t i)]
 
   let[@inline] to_length init = init
-  let[@inline] create_for_init n a = Array.create ~len:n { portable = a }
-  let[@inline] create_for_map t a = Array.create ~len:(length t) { portable = a }
+  let[@inline] empty () = [::]
   let[@inline] empty_like _ = empty ()
+  let create = Array.create
+  let create_like = Array.create_like
   let sort_inplace' = Array.sort_inplace'
   let stable_sort_inplace' = Array.stable_sort_inplace'
+  let scan_inplace' = Array.scan_inplace'
+  let scan_inclusive_inplace' = Array.scan_inclusive_inplace'
+  let unsafe_racy_set_contended = Array.unsafe_racy_set_contended
 
   include functor Make_islice
   include functor Make_init
-  include functor Make_map
   include functor Make_reduce
   include functor Make_sort
+  include functor Make_scan
+  include functor Make_map
+  include functor Make_filter
 end
 
 module Vec = struct
   include Vec
 
-  type nonrec 'a t = 'a portable t
+  type nonrec 'a t = 'a t
   type 'a init = int
   type 'a mut = 'a t
-
-  let[@inline] unsafe_racy_get_contended t i = (unsafe_racy_get_contended t i).portable
-
-  let[@inline] unsafe_racy_set_contended t i a =
-    unsafe_racy_set_contended t i { portable = a }
-  ;;
 
   [%%template
   [@@@mode.default m = (uncontended, shared)]
 
-  external wrap
-    :  'a t @ m portable
-    -> ('a modality[@mode m]) t @ m portable
-    @@ portable
-    = "%identity"
-
-  external unwrap
-    :  ('a modality[@mode m]) t @ m portable
-    -> 'a t @ m portable
-    @@ portable
-    = "%identity"
+  external wrap : 'a t @ m -> ('a modality[@mode m]) t @ m @@ portable = "%identity"
+  external unwrap : ('a modality[@mode m]) t @ m -> 'a t @ m @@ portable = "%identity"
 
   external of_vec
-    : ('a : value mod contended portable).
-    'a Vec.t @ m -> 'a portable Vec.t @ m
+    : ('a : value mod contended portable unyielding).
+    'a Vec.t @ m -> 'a Vec.t @ m
     @@ portable
     = "%identity"
 
   external to_vec
-    : ('a : value mod contended portable).
-    'a portable Vec.t @ m -> 'a Vec.t @ m
+    : ('a : value mod contended portable unyielding).
+    'a Vec.t @ m -> 'a Vec.t @ m
     @@ portable
     = "%identity"
 
   let[@inline] freeze mut = mut
-  let[@inline] get t i = ((get [@mode m]) t i).portable
-  let[@inline] unsafe_get t i = ((unsafe_get [@mode m]) t i).portable]
+  let[@inline] get' t i f = f ((get [@mode m]) t i)
+  let[@inline] unsafe_get' t i f = f ((unsafe_get [@mode m]) t i)]
 
-  let[@inline] set t i a = set t i { portable = a }
-  let[@inline] unsafe_set t i a = unsafe_set t i { portable = a }
   let[@inline] set' t i f = set t i (f ())
   let[@inline] unsafe_set' t i f = unsafe_set t i (f ())
   let[@inline] to_length init = init
-  let[@inline] create_for_init n a = create ~len:n { portable = a }
-  let[@inline] create_for_map t a = create ~len:(length t) { portable = a }
+  let[@inline] create n a = init n ~f:(fun _ -> a) [@nontail]
+  let[@inline] create_like _ ~len a = create len a
+  let[@inline] empty () = Vec.create ()
   let[@inline] empty_like _ = empty ()
 
   include functor Make_slice
   include functor Make_init
   include functor Make_inplace
-  include functor Make_map
   include functor Make_reduce
   include functor Make_sort
+  include functor Make_scan
+  include functor Make_map
+  include functor Make_filter
 end
 
 module Bigstring = struct
-  include Bigstring
-
-  type 'a mut = 'a t
-  type 'a init = 'a Kind.t * int
-
-  let unsafe_racy_get_contended = Expert.unsafe_racy_get_contended
-  let unsafe_racy_set_contended = Expert.unsafe_racy_set_contended
-
-  let create_for_init (kind, n) a =
-    let bigstring = create kind n in
-    unsafe_racy_set_contended bigstring 0 a;
-    bigstring
-  ;;
+  include Bigstring0
 
   [%%template
   [@@@mode.default m = (uncontended, shared)]
 
-  external wrap
-    :  'a t @ m portable
-    -> ('a modality[@mode m]) t @ m portable
-    @@ portable
-    = "%identity"
-
-  external unwrap
-    :  ('a modality[@mode m]) t @ m portable
-    -> 'a t @ m portable
-    @@ portable
-    = "%identity"
+  external wrap : 'a t @ m -> ('a modality[@mode m]) t @ m @@ portable = "%identity"
+  external unwrap : ('a modality[@mode m]) t @ m -> 'a t @ m @@ portable = "%identity"
 
   let freeze t = t
   let get = get
-  let unsafe_get = unsafe_get]
+  let unsafe_get = unsafe_get
+  let[@inline] get' t i f = f (get t i)
+  let[@inline] unsafe_get' t i f = f (unsafe_get t i)]
 
   let set' t i f = set t i (f ())
   let unsafe_set' t i f = unsafe_set t i (f ())
-  let to_length (_, n) = n
-  let empty_like (kind, _) = empty kind
 
   include functor Make_slice
-  include functor Make_inplace
   include functor Make_reduce
-  include functor Make_init
   include functor Make_sort
+  include functor Make_filter
+
+  let%template of_slice (slice : 'a Slice.t) : 'a t @ m =
+    (sub_shared [@mode contended])
+      slice.array
+      ~pos:slice.start
+      ~len:(slice.stop - slice.start)
+    (* An uncontended/shared slice indicates uncontended/shared access to the
+       protected index range. *)
+    |> Obj.magic_uncontended
+  [@@mode m = (uncontended, shared)]
+  ;;
 end

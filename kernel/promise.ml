@@ -1,6 +1,6 @@
 open! Base
 open! Import
-module Await = Parallel_kernel0.Await
+module Wait = Parallel_kernel0.Wait
 include Parallel_kernel0.Promise
 
 (** Promises must be applied exactly once and awaited exactly once.
@@ -29,28 +29,31 @@ include Parallel_kernel0.Promise
   +----------+------------+------------+--+--------------------------+
     v} *)
 
-type 'k suspension : value mod portable =
-  | Done : _ suspension
-  | Suspended :
-      'a t @@ aliased global * ('a continuation, 'k) Capsule.Data.t @@ global
+type%fuelproof 'k suspension : value mod portable =
+  | Done
+  | Trigger of
+      Await.Trigger.t @@ aliased global * (unit continuation, 'k) Capsule.Data.t @@ global
+  | Promise :
+      'a t @@ aliased global
+      * ('a Result.Capsule.t continuation, 'k) Capsule.Data.t @@ global
       -> 'k suspension
-[@@unsafe_allow_any_mode_crossing]
 
 let[@inline] start () = Unique.Atomic.make Start
 
-let[@inline] [@loop always] rec continue
+let[@inline] [@loop] rec continue
   : type (a : value mod contended) k.
     a @ portable unique
+    -> scheduler:Parallel_kernel0.Scheduler.t
     -> key:k Capsule.Key.t @ unique
     -> cont:
-         ( (a portable, (unit, unit) Await.Contended.Result.t, unit) Effect.Continuation.t
+         ( (a portable, (unit, unit) Wait.Contended.Result.t, unit) Effect.Continuation.t
            , k )
            Capsule.Data.t
        @ unique
     -> unit
   =
-  fun a ~key ~cont ->
-  let result, key =
+  fun a ~scheduler ~key ~cont ->
+  let #(result, key) =
     Capsule.Key.access_local key ~f:(fun [@inline] access -> exclave_
       let cont = Capsule.Data.unwrap_unique ~access cont in
       let res =
@@ -59,19 +62,33 @@ let[@inline] [@loop always] rec continue
         | Exception exn ->
           (* Cannot have come from the job; indicates a scheduler bug *)
           raise exn
-        | Operation (Await t, cont) -> Suspended (t, Capsule.Data.wrap_unique ~access cont)
+        | Operation (Promise t, cont) -> Promise (t, Capsule.Data.wrap_unique ~access cont)
+        | Operation (Trigger t, cont) -> Trigger (t, Capsule.Data.wrap_unique ~access cont)
       in
       { many = res })
   in
+  let key = Capsule.Key.globalize_unique key in
   match result.many with
   | Done -> ()
-  | Suspended (t, cont) ->
-    let key = Capsule.Key.globalize_unique key in
+  | Trigger (t, cont) ->
+    let[@inline] continue () = continue () ~scheduler ~key ~cont in
+    (match
+       (* Awaited triggers cannot be dropped, so we don't need to [discontinue]. *)
+       Await.Trigger.on_signal
+         t
+         ~f:(fun continue ->
+           scheduler.#promote continue;
+           scheduler.#wake ~n:1)
+         continue
+     with
+     | Null -> ()
+     | This continue -> continue ())
+  | Promise (t, cont) ->
     (match Unique.Atomic.exchange t (Blocking { key; cont }) with
      | Claimed -> ()
      | Ready a ->
        (match Unique.Atomic.exchange t Claimed with
-        | Blocking { key; cont } -> continue a ~key ~cont [@tail]
+        | Blocking { key; cont } -> continue a ~scheduler ~key ~cont
         | Start | Claimed | Ready _ ->
           (* Impossible: the promise has been [fill]ed, so we are the only writer, and we just wrote [Blocking]. *)
           assert false)
@@ -86,7 +103,7 @@ let[@inline] fill t a ~(scheduler : Parallel_kernel0.Scheduler.t) =
   | Blocking { key; cont } ->
     (match Unique.Atomic.exchange t Claimed with
      | Ready a ->
-       scheduler.#promote (fun () -> continue a ~key ~cont)
+       scheduler.#promote (fun () -> continue a ~scheduler ~key ~cont)
        (* We do not call [scheduler.#wake], as this worker is about to return to the scheduler. *)
      | Start | Claimed | Blocking _ ->
        (* Impossible: the promise has been [await]ed, so only we are the only writer, and we just wrote [Ready]. *)
@@ -96,45 +113,45 @@ let[@inline] fill t a ~(scheduler : Parallel_kernel0.Scheduler.t) =
     assert false
 ;;
 
-let[@inline] await t job parallel = exclave_
+let[@inline] await_or_run t job parallel = exclave_
   match Unique.Atomic.compare_and_set t ~if_phys_equal_to:Start ~replace_with:Claimed with
   | Set_here -> job parallel
   | Compare_failed ->
     (match Unique.Atomic.exchange t Claimed with
      | Claimed ->
-       Await.Contended.perform
+       Wait.Contended.perform
          (Parallel_kernel1.handler_exn parallel)
-         (Await t) [@nontail]
+         (Promise t) [@nontail]
      | Ready a -> a
      | Start | Blocking _ ->
        (* Impossible: the job is already claimed, and claimed jobs are [await]ed exactly once. *)
        assert false)
 ;;
 
-let[@inline] apply t job ~scheduler ~handler =
+let[@inline] apply t job ~scheduler ~tokens ~handler =
   match Unique.Atomic.compare_and_set t ~if_phys_equal_to:Start ~replace_with:Claimed with
   | Set_here ->
     let (P (type k) (key : k Capsule.Key.t)) = Capsule.create () in
-    let (), (_ : k Capsule.Key.t) =
+    let #((), (_ : k Capsule.Key.t)) =
       Capsule.Key.with_password key ~f:(fun [@inline] password ->
         let result =
-          job (Parallel_kernel1.create_parallel ~scheduler ~password ~handler)
+          Parallel_kernel1.with_parallel job ~scheduler ~tokens ~password ~handler
         in
-        fill t (Panic.Result.globalize result) ~scheduler)
+        fill t (Result.Capsule.globalize result) ~scheduler)
     in
     ()
   | Compare_failed -> ()
 ;;
 
-let[@inline] fiber t job ~scheduler () =
+let[@inline] fiber t job ~scheduler ~tokens () =
   let (P key) = Capsule.create () in
-  let { many = cont }, key =
+  let #({ many = cont }, key) =
     Capsule.Key.access key ~f:(fun [@inline] access ->
       let k =
-        (Await.Contended.fiber [@alert "-experimental"]) (fun handler { portable = () } ->
-          apply t job ~scheduler ~handler)
+        (Wait.Contended.fiber [@alert "-experimental"]) (fun handler { portable = () } ->
+          apply t job ~scheduler ~tokens ~handler)
       in
       { many = Capsule.Data.wrap_unique ~access k })
   in
-  continue () ~key ~cont [@tail]
+  continue () ~scheduler ~key ~cont [@tail]
 ;;

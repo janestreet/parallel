@@ -11,18 +11,23 @@ build: [
 ]
 depends: [
   "ocaml" {>= "5.2.0"}
+  "await"
   "base"
   "base_bigstring"
+  "concurrent"
   "core"
   "expect_test_helpers_core"
   "int_repr"
   "oxcaml_effect"
   "portable"
+  "portable_ws_deque"
+  "ppx_fuelproof"
   "ppx_jane"
   "stdio"
   "unboxed"
   "unique"
   "vec"
+  "base-threads"
   "dune"                     {>= "3.17.0"}
 ]
 available: arch != "arm32" & arch != "x86_32"

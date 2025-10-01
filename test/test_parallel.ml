@@ -8,20 +8,24 @@ let rec fib n =
 ;;
 
 let fib4 parallel =
-  let (x, y), (z, w) =
+  let #(x, y) =
     Parallel.fork_join2
       parallel
-      (fun parallel -> Parallel.fork_join2 parallel (fun _ -> fib 10) (fun _ -> fib 10))
-      (fun parallel -> Parallel.fork_join2 parallel (fun _ -> fib 10) (fun _ -> fib 10))
+      (fun parallel ->
+        let #(x, y) = Parallel.fork_join2 parallel (fun _ -> fib 10) (fun _ -> fib 10) in
+        x + y)
+      (fun parallel ->
+        let #(x, y) = Parallel.fork_join2 parallel (fun _ -> fib 10) (fun _ -> fib 10) in
+        x + y)
   in
-  x + y + z + w
+  x + y
 ;;
 
 let rec fib_par parallel n =
   match n with
   | 0 | 1 -> 1
   | n ->
-    let a, b =
+    let #(a, b) =
       Parallel.fork_join2
         parallel
         (fun parallel -> fib_par parallel (n - 1))
@@ -30,31 +34,31 @@ let rec fib_par parallel n =
     a + b
 ;;
 
-module Test_scheduler (Scheduler : Common.Scheduler) = struct
-  let monitor = Parallel.Monitor.create_root ()
-  let scheduler = Scheduler.configure (Scheduler.create [@alert "-experimental"]) ()
+module Test_scheduler (Scheduler : Parallel.Scheduler.S) = struct
+  let scheduler = (Scheduler.create [@alert "-experimental"]) ()
 
   let%expect_test "fib4" =
-    Scheduler.schedule scheduler ~monitor ~f:(fun parallel -> printf "%d" (fib4 parallel));
+    Scheduler.parallel scheduler ~f:(fun parallel -> printf "%d" (fib4 parallel));
     [%expect {| 356 |}]
   ;;
 
   let%expect_test "fib_par" =
-    Scheduler.schedule scheduler ~monitor ~f:(fun parallel ->
-      printf "%d" (fib_par parallel 10));
+    Scheduler.parallel scheduler ~f:(fun parallel -> printf "%d" (fib_par parallel 10));
     [%expect {| 89 |}]
   ;;
 
   let%expect_test "f3" =
-    Scheduler.schedule scheduler ~monitor ~f:(fun parallel ->
-      let a, b, c = Parallel.fork_join3 parallel (fun _ -> 1) (fun _ -> 2) (fun _ -> 3) in
+    Scheduler.parallel scheduler ~f:(fun parallel ->
+      let #(a, b, c) =
+        Parallel.fork_join3 parallel (fun _ -> 1) (fun _ -> 2) (fun _ -> 3)
+      in
       printf "%d" (a + b + c));
     [%expect {| 6 |}]
   ;;
 
   let%expect_test "f4" =
-    Scheduler.schedule scheduler ~monitor ~f:(fun parallel ->
-      let a, b, c, d =
+    Scheduler.parallel scheduler ~f:(fun parallel ->
+      let #(a, b, c, d) =
         Parallel.fork_join4 parallel (fun _ -> 1) (fun _ -> 2) (fun _ -> 3) (fun _ -> 4)
       in
       printf "%d" (a + b + c + d));
@@ -62,8 +66,8 @@ module Test_scheduler (Scheduler : Common.Scheduler) = struct
   ;;
 
   let%expect_test "f5" =
-    Scheduler.schedule scheduler ~monitor ~f:(fun parallel ->
-      let a, b, c, d, e =
+    Scheduler.parallel scheduler ~f:(fun parallel ->
+      let #(a, b, c, d, e) =
         Parallel.fork_join5
           parallel
           (fun _ -> 1)
@@ -77,7 +81,7 @@ module Test_scheduler (Scheduler : Common.Scheduler) = struct
   ;;
 
   let%expect_test "fN" =
-    Scheduler.schedule scheduler ~monitor ~f:(fun parallel ->
+    Scheduler.parallel scheduler ~f:(fun parallel ->
       let [ a; b; c; d; e; f ] =
         Parallel.fork_join
           parallel
@@ -102,7 +106,7 @@ module Test_scheduler (Scheduler : Common.Scheduler) = struct
 
   let%expect_test "for" =
     List.iter [ 1; 5; 10; 13 ] ~f:(fun grain ->
-      Scheduler.schedule scheduler ~monitor ~f:(fun parallel ->
+      Scheduler.parallel scheduler ~f:(fun parallel ->
         let a = Atomic.make 0 in
         Parallel.for_ ~grain parallel ~start:0 ~stop:10 ~f:(fun _ i -> Atomic.add a i);
         printf "%d" (Atomic.get a));
@@ -111,30 +115,25 @@ module Test_scheduler (Scheduler : Common.Scheduler) = struct
 
   let%expect_test "for invalid grain" =
     Expect_test_helpers_core.require_does_raise (fun () ->
-      Scheduler.schedule scheduler ~monitor ~f:(fun parallel ->
+      Scheduler.parallel scheduler ~f:(fun parallel ->
         Parallel.for_ ~grain:0 parallel ~start:0 ~stop:0 ~f:(fun _ _ -> ())));
-    [%expect
-      {|
-      (panic.ml.Panic (
-        Incident (
-          (id "<id elided in test>")
-          (exn (Invalid_argument "grain < 1"))
-          (backtrace ("<backtrace elided in test>")))))
-      |}]
+    [%expect {| (Invalid_argument "grain < 1") |}]
   ;;
 
   let%expect_test "fold" =
     List.iter [ 1; 5; 10; 13 ] ~f:(fun grain ->
-      Scheduler.schedule scheduler ~monitor ~f:(fun parallel ->
+      Scheduler.parallel scheduler ~f:(fun parallel ->
         let fold_n n =
           Parallel.fold
             ~grain
             parallel
-            ~init:#(0, (~start:0, ~stop:n))
+            ~init:(fun () -> 0)
+            ~state:((~start:0, ~stop:n) : start:int * stop:int)
             ~next:(fun _ acc (~start, ~stop) ->
               if start = stop
               then Pair_or_null.none ()
               else Pair_or_null.some (acc + 1) (~start:(start + 1), ~stop))
+            ~stop:(fun _ i -> i)
             ~fork:(fun _ (~start, ~stop) ->
               let pivot = start + ((stop - start) / 2) in
               if pivot < start + grain
@@ -151,33 +150,66 @@ module Test_scheduler (Scheduler : Common.Scheduler) = struct
         |}])
   ;;
 
+  let%expect_test "fold with treevec state" =
+    let open struct
+      type t =
+        | Leaf of int Vec.t
+        | Node of t * t
+
+      let rec collect t =
+        match t with
+        | Leaf vec -> Vec.to_list vec
+        | Node (a, b) -> collect a @ collect b
+      ;;
+    end in
+    List.iter [ 1; 5; 10; 13 ] ~f:(fun grain ->
+      Scheduler.parallel scheduler ~f:(fun parallel ->
+        let fold_n n =
+          Parallel.fold
+            ~grain
+            parallel
+            ~init:(fun () : int Vec.t -> Vec.create ())
+            ~state:((~start:0, ~stop:n) : start:int * stop:int)
+            ~next:(fun _ acc (~start, ~stop) ->
+              if start = stop
+              then Pair_or_null.none ()
+              else (
+                Vec.push_back acc start;
+                Pair_or_null.some acc (~start:(start + 1), ~stop)))
+            ~stop:(fun _ vec -> Leaf vec)
+            ~fork:(fun _ (~start, ~stop) ->
+              let pivot = start + ((stop - start) / 2) in
+              if pivot < start + grain
+              then Pair_or_null.none ()
+              else Pair_or_null.some (~start, ~stop:pivot) (~start:pivot, ~stop))
+            ~join:(fun _ a b -> Node (a, b))
+        in
+        print_s [%message (collect (fold_n 10) : int list)];
+        assert (List.equal Int.equal (collect (fold_n 10_000)) (List.init 10_000 ~f:Fn.id)));
+      [%expect {| ("collect (fold_n 10)" (0 1 2 3 4 5 6 7 8 9)) |}])
+  ;;
+
   let%expect_test "fold invalid grain" =
     Expect_test_helpers_core.require_does_raise (fun () ->
-      Scheduler.schedule scheduler ~monitor ~f:(fun parallel ->
+      Scheduler.parallel scheduler ~f:(fun parallel ->
         Parallel.fold
           ~grain:0
           parallel
-          ~init:#((), ())
+          ~init:(fun () -> ())
+          ~state:()
           ~next:(fun _ () () -> Pair_or_null.none ())
+          ~stop:(fun _ () -> ())
           ~fork:(fun _ () -> Pair_or_null.none ())
           ~join:(fun _ () () -> ())));
-    [%expect
-      {|
-      (panic.ml.Panic (
-        Incident (
-          (id "<id elided in test>")
-          (exn (Invalid_argument "grain < 1"))
-          (backtrace ("<backtrace elided in test>")))))
-      |}]
+    [%expect {| (Invalid_argument "grain < 1") |}]
   ;;
 end
 
 include Common.Test_schedulers (Test_scheduler)
 
 let%expect_test "sequential ordering" =
-  let monitor = Parallel.Monitor.create_root () in
   let scheduler = Parallel.Scheduler.Sequential.create () in
-  Parallel.Scheduler.Sequential.schedule scheduler ~monitor ~f:(fun parallel ->
+  Parallel.Scheduler.Sequential.parallel scheduler ~f:(fun parallel ->
     let _ : _ =
       Parallel.fork_join2
         parallel

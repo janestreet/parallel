@@ -2,23 +2,12 @@ open! Core
 open! Import
 module Arrays = Parallel.Arrays
 
-let require_raise =
-  Expect_test_helpers_core.require_does_raise
-  |> Portability_hacks.magic_portable__needs_base_and_core
-;;
+let require_raise = Expect_test_helpers_core.require_does_raise
+let assert_eq = [%test_result: int array]
+let assert_eq2 = [%test_result: (int * int) array]
 
-let assert_eq =
-  [%test_result: int array] |> Portability_hacks.magic_portable__needs_base_and_core
-;;
-
-let assert_eq2 =
-  [%test_result: (int * int) array]
-  |> Portability_hacks.magic_portable__needs_base_and_core
-;;
-
-module Test_scheduler (Scheduler : Common.Scheduler) = struct
-  let monitor = Parallel.Monitor.create_root ()
-  let scheduler = Scheduler.configure (Scheduler.create [@alert "-experimental"]) ()
+module Test_scheduler (Scheduler : Parallel.Scheduler.S) = struct
+  let scheduler = (Scheduler.create [@alert "-experimental"]) ()
   let granularities ~f = List.iter [ 1; 3; 5; 12; 100 ] ~f
 
   module Test_sorts = struct
@@ -27,7 +16,7 @@ module Test_scheduler (Scheduler : Common.Scheduler) = struct
         [%generator: [%custom Quickcheck.Generator.small_positive_int] * int array]
         ~sexp_of:(fun (grain, array) -> [%message (grain : int) (array : int array)])
         ~f:(fun (grain, array) ->
-          Scheduler.schedule scheduler ~monitor ~f:(fun parallel ->
+          Scheduler.parallel scheduler ~f:(fun parallel ->
             let array = Obj.magic_uncontended array in
             let expect = Base.Array.sorted_copy array ~compare in
             let observe =
@@ -47,7 +36,7 @@ module Test_scheduler (Scheduler : Common.Scheduler) = struct
 
     let%expect_test "large" =
       let array = Array.init 1_000_000 ~f:(fun _ -> Random.int 1_000_000) in
-      Scheduler.schedule scheduler ~monitor ~f:(fun parallel ->
+      Scheduler.parallel scheduler ~f:(fun parallel ->
         let array = Obj.magic_uncontended array in
         let expect = Array.sorted_copy array ~compare in
         let observe =
@@ -66,7 +55,7 @@ module Test_scheduler (Scheduler : Common.Scheduler) = struct
     ;;
 
     let%expect_test "stability" =
-      Scheduler.schedule scheduler ~monitor ~f:(fun parallel ->
+      Scheduler.parallel scheduler ~f:(fun parallel ->
         let array =
           Array.init 1_000_000 ~f:(fun _ -> Random.int 100, Random.int 1_000_000)
         in
@@ -83,14 +72,14 @@ module Test_scheduler (Scheduler : Common.Scheduler) = struct
   end
 
   let%expect_test "fold_big" =
-    Scheduler.schedule scheduler ~monitor ~f:(fun parallel ->
+    Scheduler.parallel scheduler ~f:(fun parallel ->
       let array = Array.init 100_000 ~f:Fn.id in
       granularities ~f:(fun grain ->
         Parallel.Arrays.Array.fold
           ~grain
           parallel
           (Arrays.Array.of_array array)
-          ~init:0
+          ~init:(fun () -> 0)
           ~f:(fun acc i -> acc + i)
           ~combine:(fun a b -> a + b)
         |> printf "%d\n")
@@ -105,9 +94,56 @@ module Test_scheduler (Scheduler : Common.Scheduler) = struct
       |}]
   ;;
 
+  let%expect_test "scan big" =
+    Scheduler.parallel scheduler ~f:(fun parallel ->
+      let array = Array.init 1_000_000 ~f:(fun _ -> Random.int 1_000_000) in
+      let expect_result, expect_scanned =
+        Array.fold_map array ~init:0 ~f:(fun acc a -> acc + a, acc)
+      in
+      let scanned, result =
+        Parallel.Arrays.Array.scan
+          parallel
+          (Arrays.Array.of_array array)
+          ~init:0
+          ~f:(fun a b -> a + b)
+      in
+      assert_eq (Arrays.Array.to_array scanned) ~expect:expect_scanned;
+      [%test_result: int] result ~expect:expect_result);
+    [%expect {| |}]
+  ;;
+
+  let%expect_test "scan_inclusive big" =
+    Scheduler.parallel scheduler ~f:(fun parallel ->
+      let array = Array.init 1_000_000 ~f:(fun _ -> Random.int 1_000_000) in
+      let _, expect_scanned =
+        Array.fold_map array ~init:0 ~f:(fun acc a -> acc + a, acc + a)
+      in
+      let scanned =
+        Parallel.Arrays.Array.scan_inclusive
+          parallel
+          (Arrays.Array.of_array array)
+          ~init:0
+          ~f:(fun a b -> a + b)
+      in
+      assert_eq (Arrays.Array.to_array scanned) ~expect:expect_scanned);
+    [%expect {| |}]
+  ;;
+
+  let%expect_test "filter big" =
+    Scheduler.parallel scheduler ~f:(fun parallel ->
+      let array = Array.init 1_000_000 ~f:(fun _ -> Random.int 1_000_000) in
+      let expect = Array.filter array ~f:(fun i -> i >= 500_000) in
+      let filtered =
+        Parallel.Arrays.Array.filter parallel (Arrays.Array.of_array array) ~f:(fun i ->
+          i >= 500_000)
+      in
+      assert_eq (Arrays.Array.to_array filtered) ~expect);
+    [%expect {| |}]
+  ;;
+
   module Test_mut (Array : sig
     @@ portable
-      type 'a t : mutable_data with 'a portable
+      type ('a : value mod portable unyielding) t : value mod portable
 
       module Slice : Arrays.Slice with type 'a array := 'a t
       include Arrays.Inplace with type 'a t := 'a t
@@ -234,7 +270,7 @@ module Test_scheduler (Scheduler : Common.Scheduler) = struct
     ;;
 
     let%expect_test "slice fork" =
-      Scheduler.schedule scheduler ~monitor ~f:(fun parallel ->
+      Scheduler.parallel scheduler ~f:(fun parallel ->
         let array = Array.create () in
         let s = (Array.Slice.slice [@mode m]) array in
         let%template with_pivot pivot =
@@ -246,7 +282,7 @@ module Test_scheduler (Scheduler : Common.Scheduler) = struct
             (fun _parallel s -> (slice_to_list [@mode m]) s)
         in
         let print_with_pivot ~pivot =
-          let l0, l1 = with_pivot pivot in
+          let #(l0, l1) = with_pivot pivot in
           print_s [%message (pivot : int option) (l0 : int list) (l1 : int list)]
         in
         print_with_pivot ~pivot:None;
@@ -254,10 +290,10 @@ module Test_scheduler (Scheduler : Common.Scheduler) = struct
         print_with_pivot ~pivot:(Some 0);
         print_with_pivot ~pivot:(Some 10);
         require_raise (fun () ->
-          let _ : int list * int list = with_pivot (Some (-1)) in
+          let _ : #(int list * int list) = with_pivot (Some (-1)) in
           ());
         require_raise (fun () ->
-          let _ : int list * int list = with_pivot (Some 11) in
+          let _ : #(int list * int list) = with_pivot (Some 11) in
           ())
         [@nontail]);
       [%expect
@@ -271,27 +307,143 @@ module Test_scheduler (Scheduler : Common.Scheduler) = struct
         |}]
     ;;
 
-    let%expect_test "empty slice fork" =
-      Scheduler.schedule scheduler ~monitor ~f:(fun parallel ->
+    let%expect_test "empty slice" =
+      Scheduler.parallel scheduler ~f:(fun parallel ->
         let array = Array.create () in
         let s =
           (Array.Slice.slice [@mode m]) array |> (Array.Slice.sub [@mode m]) ~i:0 ~j:0
         in
-        require_raise (fun () ->
-          let (), () =
-            (Array.Slice.fork_join2 [@mode m])
-              parallel
-              s
-              (fun _parallel _s -> assert false)
-              (fun _parallel _s -> assert false)
-          in
-          ())
+        let len label s =
+          let length = Array.Slice.length s in
+          print_s [%message label (length : int)]
+        in
+        let #((), ()) =
+          (Array.Slice.fork_join2 [@mode m])
+            parallel
+            s
+            (fun _parallel s -> len "fork_join" s)
+            (fun _parallel s -> len "fork_join" s)
+        in
+        Array.Slice.(for_ [@mode m]) parallel ~pivots:[::] s ~f:(fun _ s ->
+          len "for_ without pivots" s);
+        Array.Slice.(for_ [@mode m]) parallel ~pivots:[: 0; 0; 0 :] s ~f:(fun _ s ->
+          len "for_ with pivots" s)
         [@nontail]);
-      [%expect {| (Invalid_argument "empty slice") |}]
+      [%expect
+        {|
+        (fork_join (length 0))
+        (fork_join (length 0))
+        ("for_ without pivots" (length 0))
+        ("for_ with pivots" (length 0))
+        ("for_ with pivots" (length 0))
+        ("for_ with pivots" (length 0))
+        ("for_ with pivots" (length 0))
+        |}]
     ;;]
 
+    let%expect_test "parallel for over slices" =
+      Scheduler.parallel scheduler ~f:(fun parallel ->
+        let array = Array.create () in
+        Array.print array;
+        let slice = Array.Slice.slice array in
+        let len = Array.Slice.length slice in
+        let pivots = Iarray.init (len - 1) ~f:(fun i -> i + 1) in
+        Array.Slice.for_ parallel ~pivots slice ~f:(fun _ slice ->
+          let x = Array.Slice.get slice 0 in
+          Array.Slice.set slice 0 (x + 1));
+        Array.print array);
+      [%expect
+        {|
+        (array (0 1 2 3 4 5 6 7 8 9))
+        (array (1 2 3 4 5 6 7 8 9 10))
+        |}]
+    ;;
+
+    let%expect_test "mixing slice.sub/fork_join2 with for_" =
+      Scheduler.parallel scheduler ~f:(fun parallel ->
+        let array = Array.create () in
+        Array.print array;
+        let slice = Array.Slice.slice array in
+        let subslice = Array.Slice.sub slice ~i:1 ~j:9 in
+        let pivots = [: 2; 4; 6 :] in
+        Array.Slice.for_ parallel ~pivots subslice ~f:(fun _ slice ->
+          for i = 0 to Array.Slice.length slice - 1 do
+            let x = Array.Slice.get slice i in
+            Array.Slice.set slice i (x * 2)
+          done);
+        Array.print array;
+        let #((), ()) =
+          Array.Slice.fork_join2
+            parallel
+            ~pivot:5
+            slice
+            (fun parallel left_slice ->
+              let pivots = [: 1; 3 :] in
+              Array.Slice.for_ parallel ~pivots left_slice ~f:(fun _ s ->
+                for i = 0 to Array.Slice.length s - 1 do
+                  let x = Array.Slice.get s i in
+                  Array.Slice.set s i (x + 10)
+                done))
+            (fun parallel right_slice ->
+              let pivots = [: 2; 4 :] in
+              Array.Slice.for_ parallel ~pivots right_slice ~f:(fun _ s ->
+                for i = 0 to Array.Slice.length s - 1 do
+                  let x = Array.Slice.get s i in
+                  Array.Slice.set s i (x + 100)
+                done))
+        in
+        Array.print array [@nontail]);
+      [%expect
+        {|
+        (array (0 1 2 3 4 5 6 7 8 9))
+        (array (0 2 4 6 8 10 12 14 16 9))
+        (array (10 12 14 16 18 110 112 114 116 109))
+        |}]
+    ;;
+
+    let%expect_test "parallel fori over slices" =
+      Scheduler.parallel scheduler ~f:(fun parallel ->
+        let array = Array.create () in
+        Array.print array;
+        let slice = Array.Slice.slice array in
+        let len = Array.Slice.length slice in
+        let pivots = Iarray.init (len - 1) ~f:(fun i -> i + 1) in
+        Array.Slice.fori parallel ~pivots slice ~f:(fun _ i slice ->
+          let x = Array.Slice.get slice 0 in
+          Array.Slice.set slice 0 (x + i));
+        Array.print array);
+      [%expect
+        {|
+        (array (0 1 2 3 4 5 6 7 8 9))
+        (array (0 2 4 6 8 10 12 14 16 18))
+        |}]
+    ;;
+
+    let%expect_test "bad pivots inputs" =
+      Scheduler.parallel scheduler ~f:(fun parallel ->
+        let array = Array.create () in
+        let slice = Array.Slice.slice array in
+        let len = Array.Slice.length slice in
+        let pivots = [: 1; len + 1 :] in
+        require_raise (fun () ->
+          Array.Slice.for_ parallel ~pivots slice ~f:(fun _ _ -> ()));
+        let pivots = [: -1; 1 :] in
+        require_raise (fun () ->
+          Array.Slice.for_ parallel ~pivots slice ~f:(fun _ _ -> ()));
+        let pivots = [: 3; 1 :] in
+        require_raise (fun () ->
+          Array.Slice.for_ parallel ~pivots slice ~f:(fun _ _ -> ()))
+        [@nontail]);
+      [%expect
+        {|
+        (Invalid_argument "index out of bounds")
+        (Invalid_argument "index out of bounds")
+        (Invalid_argument "pivots must be non-decreasing")
+        |}]
+    ;;
+
     let%expect_test "map_inplace" =
-      Scheduler.schedule scheduler ~monitor ~f:(fun parallel ->
+      Scheduler.parallel scheduler ~f:(fun parallel ->
         let array = Array.create () in
         granularities ~f:(fun grain ->
           Array.map_inplace ~grain parallel array ~f:(fun i -> 2 * i);
@@ -311,7 +463,7 @@ module Test_scheduler (Scheduler : Common.Scheduler) = struct
     ;;
 
     let%expect_test "mapi_inplace" =
-      Scheduler.schedule scheduler ~monitor ~f:(fun parallel ->
+      Scheduler.parallel scheduler ~f:(fun parallel ->
         let array = Array.create () in
         granularities ~f:(fun grain ->
           Array.mapi_inplace ~grain parallel array ~f:(fun idx i -> i + idx);
@@ -331,7 +483,7 @@ module Test_scheduler (Scheduler : Common.Scheduler) = struct
     ;;
 
     let%expect_test "init_inplace" =
-      Scheduler.schedule scheduler ~monitor ~f:(fun parallel ->
+      Scheduler.parallel scheduler ~f:(fun parallel ->
         let array = Array.create () in
         granularities ~f:(fun grain ->
           Array.init_inplace ~grain parallel array ~f:(fun i -> 2 * i);
@@ -351,7 +503,7 @@ module Test_scheduler (Scheduler : Common.Scheduler) = struct
     ;;
 
     let%expect_test "sort_inplace" =
-      Scheduler.schedule scheduler ~monitor ~f:(fun parallel ->
+      Scheduler.parallel scheduler ~f:(fun parallel ->
         let array = Array.create () in
         granularities ~f:(fun grain ->
           Array.init_inplace parallel array ~f:(fun i -> Base.Int.(hash i % 100));
@@ -372,7 +524,7 @@ module Test_scheduler (Scheduler : Common.Scheduler) = struct
     ;;
 
     let%expect_test "stable_sort_inplace" =
-      Scheduler.schedule scheduler ~monitor ~f:(fun parallel ->
+      Scheduler.parallel scheduler ~f:(fun parallel ->
         let array = Array.create () in
         granularities ~f:(fun grain ->
           Array.init_inplace parallel array ~f:(fun i -> Base.Int.(hash i % 100));
@@ -391,23 +543,76 @@ module Test_scheduler (Scheduler : Common.Scheduler) = struct
         (Invalid_argument "grain < 1")
         |}]
     ;;
+
+    let%expect_test "scan_inplace" =
+      Scheduler.parallel scheduler ~f:(fun parallel ->
+        let array = Array.create () in
+        granularities ~f:(fun grain ->
+          Array.init_inplace parallel array ~f:(fun i -> Base.Int.(hash i % 100));
+          let total =
+            Array.scan_inplace ~grain parallel array ~init:0 ~f:(fun a b -> a + b)
+          in
+          Array.print array;
+          print_s [%sexp ~~(total : int)]);
+        require_raise (fun () ->
+          Array.scan_inplace ~grain:0 parallel array ~init:0 ~f:(fun a b -> a + b))
+        [@nontail]);
+      [%expect
+        {|
+        (array (0 64 98 138 179 212 248 346 353 396))
+        (total 423)
+        (array (0 64 98 138 179 212 248 346 353 396))
+        (total 423)
+        (array (0 64 98 138 179 212 248 346 353 396))
+        (total 423)
+        (array (0 64 98 138 179 212 248 346 353 396))
+        (total 423)
+        (array (0 64 98 138 179 212 248 346 353 396))
+        (total 423)
+        (Invalid_argument "grain < 1")
+        |}]
+    ;;
+
+    let%expect_test "scan_inclusive_inplace" =
+      Scheduler.parallel scheduler ~f:(fun parallel ->
+        let array = Array.create () in
+        granularities ~f:(fun grain ->
+          Array.init_inplace parallel array ~f:(fun i -> Base.Int.(hash i % 100));
+          Array.scan_inclusive_inplace ~grain parallel array ~init:0 ~f:(fun a b -> a + b);
+          Array.print array);
+        require_raise (fun () ->
+          Array.scan_inclusive_inplace ~grain:0 parallel array ~init:0 ~f:(fun a b ->
+            a + b))
+        [@nontail]);
+      [%expect
+        {|
+        (array (64 98 138 179 212 248 346 353 396 423))
+        (array (64 98 138 179 212 248 346 353 396 423))
+        (array (64 98 138 179 212 248 346 353 396 423))
+        (array (64 98 138 179 212 248 346 353 396 423))
+        (array (64 98 138 179 212 248 346 353 396 423))
+        (Invalid_argument "grain < 1")
+        |}]
+    ;;
   end
 
   module Test_immut (Array : sig
     @@ portable
-      type 'a t : value mod portable with 'a portable
+      type ('a : value mod portable unyielding) t : value mod portable
 
       include Arrays.Init with type 'a t := 'a t and type 'a init := int
       include Arrays.Map with type 'a t := 'a t
       include Arrays.Reduce with type 'a t := 'a t
       include Arrays.Sort with type 'a t := 'a t
+      include Arrays.Scan with type 'a t := 'a t
+      include Arrays.Filter with type 'a t := 'a t
 
       val create : unit -> int t
       val print : int t -> unit
     end) =
   struct
     let%expect_test "init" =
-      Scheduler.schedule scheduler ~monitor ~f:(fun parallel ->
+      Scheduler.parallel scheduler ~f:(fun parallel ->
         granularities ~f:(fun grain ->
           let array = Array.init ~grain parallel 10 ~f:(fun i -> 2 * i) in
           Array.print array);
@@ -427,7 +632,7 @@ module Test_scheduler (Scheduler : Common.Scheduler) = struct
     ;;
 
     let%expect_test "map" =
-      Scheduler.schedule scheduler ~monitor ~f:(fun parallel ->
+      Scheduler.parallel scheduler ~f:(fun parallel ->
         let array = Array.create () in
         granularities ~f:(fun grain ->
           let array = Array.map ~grain parallel array ~f:(fun i -> 2 * i) in
@@ -448,7 +653,7 @@ module Test_scheduler (Scheduler : Common.Scheduler) = struct
     ;;
 
     let%expect_test "mapi" =
-      Scheduler.schedule scheduler ~monitor ~f:(fun parallel ->
+      Scheduler.parallel scheduler ~f:(fun parallel ->
         let array = Array.create () in
         granularities ~f:(fun grain ->
           let array = Array.mapi ~grain parallel array ~f:(fun idx i -> i + idx) in
@@ -469,7 +674,7 @@ module Test_scheduler (Scheduler : Common.Scheduler) = struct
     ;;
 
     let%expect_test "map2" =
-      Scheduler.schedule scheduler ~monitor ~f:(fun parallel ->
+      Scheduler.parallel scheduler ~f:(fun parallel ->
         let arraya = Array.create () in
         let arrayb = Array.create () in
         granularities ~f:(fun grain ->
@@ -493,7 +698,7 @@ module Test_scheduler (Scheduler : Common.Scheduler) = struct
     ;;
 
     let%expect_test "mapi2" =
-      Scheduler.schedule scheduler ~monitor ~f:(fun parallel ->
+      Scheduler.parallel scheduler ~f:(fun parallel ->
         let arraya = Array.create () in
         let arrayb = Array.create () in
         granularities ~f:(fun grain ->
@@ -520,7 +725,7 @@ module Test_scheduler (Scheduler : Common.Scheduler) = struct
 
     let%expect_test "iter" =
       let sum = Atomic.make 0 in
-      Scheduler.schedule scheduler ~monitor ~f:(fun parallel ->
+      Scheduler.parallel scheduler ~f:(fun parallel ->
         let array = Array.create () in
         granularities ~f:(fun grain ->
           Array.iter ~grain parallel array ~f:(fun i ->
@@ -538,7 +743,7 @@ module Test_scheduler (Scheduler : Common.Scheduler) = struct
 
     let%expect_test "iteri" =
       let sum = Atomic.make 0 in
-      Scheduler.schedule scheduler ~monitor ~f:(fun parallel ->
+      Scheduler.parallel scheduler ~f:(fun parallel ->
         let array = Array.create () in
         granularities ~f:(fun grain ->
           Array.iteri ~grain parallel array ~f:(fun idx i ->
@@ -564,7 +769,7 @@ module Test_scheduler (Scheduler : Common.Scheduler) = struct
     ;;
 
     let%expect_test "fold" =
-      Scheduler.schedule scheduler ~monitor ~f:(fun parallel ->
+      Scheduler.parallel scheduler ~f:(fun parallel ->
         let array = Array.create () in
         granularities ~f:(fun grain ->
           let list =
@@ -572,7 +777,7 @@ module Test_scheduler (Scheduler : Common.Scheduler) = struct
               ~grain
               parallel
               array
-              ~init:[]
+              ~init:(fun () : int list -> [])
               ~f:(fun acc i -> i :: acc)
               ~combine:swap_append
           in
@@ -582,7 +787,7 @@ module Test_scheduler (Scheduler : Common.Scheduler) = struct
             ~grain:0
             parallel
             array
-            ~init:()
+            ~init:(fun () -> ())
             ~f:(fun _ _ -> ())
             ~combine:(fun () () -> ()))
         [@nontail]);
@@ -598,7 +803,7 @@ module Test_scheduler (Scheduler : Common.Scheduler) = struct
     ;;
 
     let%expect_test "foldi" =
-      Scheduler.schedule scheduler ~monitor ~f:(fun parallel ->
+      Scheduler.parallel scheduler ~f:(fun parallel ->
         let array = Array.create () in
         granularities ~f:(fun grain ->
           let list =
@@ -606,7 +811,7 @@ module Test_scheduler (Scheduler : Common.Scheduler) = struct
               ~grain
               parallel
               array
-              ~init:[]
+              ~init:(fun () : int list -> [])
               ~f:(fun idx acc i -> (idx + i) :: acc)
               ~combine:swap_append
           in
@@ -616,7 +821,7 @@ module Test_scheduler (Scheduler : Common.Scheduler) = struct
             ~grain:0
             parallel
             array
-            ~init:()
+            ~init:(fun () -> ())
             ~f:(fun _ _ _ -> ())
             ~combine:(fun () () -> ()))
         [@nontail]);
@@ -632,7 +837,7 @@ module Test_scheduler (Scheduler : Common.Scheduler) = struct
     ;;
 
     let%expect_test "reduce" =
-      Scheduler.schedule scheduler ~monitor ~f:(fun parallel ->
+      Scheduler.parallel scheduler ~f:(fun parallel ->
         let array = Array.create () in
         granularities ~f:(fun grain ->
           let option = Array.reduce ~grain parallel array ~f:(fun a b -> a + b) in
@@ -653,7 +858,7 @@ module Test_scheduler (Scheduler : Common.Scheduler) = struct
     ;;
 
     let%expect_test "find" =
-      Scheduler.schedule scheduler ~monitor ~f:(fun parallel ->
+      Scheduler.parallel scheduler ~f:(fun parallel ->
         let array = Array.create () in
         granularities ~f:(fun grain ->
           let option = Array.find ~grain parallel array ~f:(fun a -> Base.Int.(a = 7)) in
@@ -674,7 +879,7 @@ module Test_scheduler (Scheduler : Common.Scheduler) = struct
     ;;
 
     let%expect_test "findi" =
-      Scheduler.schedule scheduler ~monitor ~f:(fun parallel ->
+      Scheduler.parallel scheduler ~f:(fun parallel ->
         let array = Array.create () in
         granularities ~f:(fun grain ->
           let option =
@@ -697,7 +902,7 @@ module Test_scheduler (Scheduler : Common.Scheduler) = struct
     ;;
 
     let%expect_test "sort" =
-      Scheduler.schedule scheduler ~monitor ~f:(fun parallel ->
+      Scheduler.parallel scheduler ~f:(fun parallel ->
         let array0 = Array.init parallel 10 ~f:(fun i -> Base.Int.(hash i % 100)) in
         granularities ~f:(fun grain ->
           let array = Array.sort ~grain parallel array0 ~compare:[%eta2 compare] in
@@ -718,7 +923,7 @@ module Test_scheduler (Scheduler : Common.Scheduler) = struct
     ;;
 
     let%expect_test "stable_sort" =
-      Scheduler.schedule scheduler ~monitor ~f:(fun parallel ->
+      Scheduler.parallel scheduler ~f:(fun parallel ->
         let array0 = Array.init parallel 10 ~f:(fun i -> Base.Int.(hash i % 100)) in
         granularities ~f:(fun grain ->
           let array = Array.stable_sort ~grain parallel array0 ~compare:[%eta2 compare] in
@@ -739,6 +944,98 @@ module Test_scheduler (Scheduler : Common.Scheduler) = struct
         (Invalid_argument "grain < 1")
         |}]
     ;;
+
+    let%expect_test "scan" =
+      Scheduler.parallel scheduler ~f:(fun parallel ->
+        let array0 = Array.init parallel 10 ~f:(fun i -> Base.Int.(hash i % 100)) in
+        granularities ~f:(fun grain ->
+          let array, total =
+            Array.scan ~grain parallel array0 ~init:0 ~f:(fun a b -> a + b)
+          in
+          Array.print array;
+          print_s [%sexp ~~(total : int)]);
+        require_raise (fun () ->
+          Array.scan ~grain:0 parallel array0 ~init:0 ~f:(fun a b -> a + b))
+        [@nontail]);
+      [%expect
+        {|
+        (array (0 64 98 138 179 212 248 346 353 396))
+        (total 423)
+        (array (0 64 98 138 179 212 248 346 353 396))
+        (total 423)
+        (array (0 64 98 138 179 212 248 346 353 396))
+        (total 423)
+        (array (0 64 98 138 179 212 248 346 353 396))
+        (total 423)
+        (array (0 64 98 138 179 212 248 346 353 396))
+        (total 423)
+        (Invalid_argument "grain < 1")
+        |}]
+    ;;
+
+    let%expect_test "scan_inclusive" =
+      Scheduler.parallel scheduler ~f:(fun parallel ->
+        let array0 = Array.init parallel 10 ~f:(fun i -> Base.Int.(hash i % 100)) in
+        granularities ~f:(fun grain ->
+          let array =
+            Array.scan_inclusive ~grain parallel array0 ~init:0 ~f:(fun a b -> a + b)
+          in
+          Array.print array);
+        require_raise (fun () ->
+          Array.scan ~grain:0 parallel array0 ~init:0 ~f:(fun a b -> a + b))
+        [@nontail]);
+      [%expect
+        {|
+        (array (64 98 138 179 212 248 346 353 396 423))
+        (array (64 98 138 179 212 248 346 353 396 423))
+        (array (64 98 138 179 212 248 346 353 396 423))
+        (array (64 98 138 179 212 248 346 353 396 423))
+        (array (64 98 138 179 212 248 346 353 396 423))
+        (Invalid_argument "grain < 1")
+        |}]
+    ;;
+
+    let%expect_test "filter" =
+      Scheduler.parallel scheduler ~f:(fun parallel ->
+        let array0 = Array.init parallel 10 ~f:(fun i -> Base.Int.(hash i % 100)) in
+        granularities ~f:(fun grain ->
+          let array = Array.filter ~grain parallel array0 ~f:(fun a -> a < 50) in
+          Array.print array);
+        require_raise (fun () ->
+          Array.filter ~grain:0 parallel array0 ~f:(fun a -> a < 50))
+        [@nontail]);
+      [%expect
+        {|
+        (array (34 40 41 33 36 7 43 27))
+        (array (34 40 41 33 36 7 43 27))
+        (array (34 40 41 33 36 7 43 27))
+        (array (34 40 41 33 36 7 43 27))
+        (array (34 40 41 33 36 7 43 27))
+        (Invalid_argument "grain < 1")
+        |}]
+    ;;
+
+    let%expect_test "filteri" =
+      Scheduler.parallel scheduler ~f:(fun parallel ->
+        let array0 = Array.init parallel 10 ~f:(fun i -> Base.Int.(hash i % 100)) in
+        granularities ~f:(fun grain ->
+          let array =
+            Array.filteri ~grain parallel array0 ~f:(fun i a -> i >= 5 && a < 50)
+          in
+          Array.print array);
+        require_raise (fun () ->
+          Array.filteri ~grain:0 parallel array0 ~f:(fun i a -> i >= 5 && a < 50))
+        [@nontail]);
+      [%expect
+        {|
+        (array (36 7 43 27))
+        (array (36 7 43 27))
+        (array (36 7 43 27))
+        (array (36 7 43 27))
+        (array (36 7 43 27))
+        (Invalid_argument "grain < 1")
+        |}]
+    ;;
   end
 
   module Test_array = struct
@@ -755,6 +1052,52 @@ module Test_scheduler (Scheduler : Common.Scheduler) = struct
 
     module _ = Test_mut (Array)
     module _ = Test_immut (Array)
+
+    let%expect_test "filter_map" =
+      Scheduler.parallel scheduler ~f:(fun parallel ->
+        let array0 = Array.init parallel 10 ~f:(fun i -> Base.Int.(hash i % 100)) in
+        granularities ~f:(fun grain ->
+          let array =
+            Array.filter_map ~grain parallel array0 ~f:(fun a ->
+              if a < 50 then This a else Null)
+          in
+          Array.print array);
+        require_raise (fun () ->
+          Array.filter_map ~grain:0 parallel array0 ~f:(fun _ -> Null))
+        [@nontail]);
+      [%expect
+        {|
+        (array (34 40 41 33 36 7 43 27))
+        (array (34 40 41 33 36 7 43 27))
+        (array (34 40 41 33 36 7 43 27))
+        (array (34 40 41 33 36 7 43 27))
+        (array (34 40 41 33 36 7 43 27))
+        (Invalid_argument "grain < 1")
+        |}]
+    ;;
+
+    let%expect_test "filter_mapi" =
+      Scheduler.parallel scheduler ~f:(fun parallel ->
+        let array0 = Array.init parallel 10 ~f:(fun i -> Base.Int.(hash i % 100)) in
+        granularities ~f:(fun grain ->
+          let array =
+            Array.filter_mapi ~grain parallel array0 ~f:(fun i a ->
+              if i >= 5 && a < 50 then This a else Null)
+          in
+          Array.print array);
+        require_raise (fun () ->
+          Array.filter_mapi ~grain:0 parallel array0 ~f:(fun _ _ -> Null))
+        [@nontail]);
+      [%expect
+        {|
+        (array (36 7 43 27))
+        (array (36 7 43 27))
+        (array (36 7 43 27))
+        (array (36 7 43 27))
+        (array (36 7 43 27))
+        (Invalid_argument "grain < 1")
+        |}]
+    ;;
   end
 
   module Test_iarray = struct
@@ -776,7 +1119,7 @@ module Test_scheduler (Scheduler : Common.Scheduler) = struct
     module Array = struct
       include Arrays.Vec
 
-      let create () = Vec.init 10 ~f:(fun i -> i) |> Obj.magic_portable |> of_vec
+      let create () = of_vec (Vec.init 10 ~f:(fun i -> i))
 
       let print array =
         let array = Vec.to_list (to_vec array) in
@@ -810,7 +1153,7 @@ module Test_scheduler (Scheduler : Common.Scheduler) = struct
     ;;
 
     let%expect_test "init" =
-      Scheduler.schedule scheduler ~monitor ~f:(fun parallel ->
+      Scheduler.parallel scheduler ~f:(fun parallel ->
         int_kinds ~f:(fun kind ~of_int ~to_int:_ ->
           let bigstring =
             Bigstring.init parallel (kind, 10) ~f:(fun i -> of_int (2 * i))
@@ -840,7 +1183,7 @@ module Test_scheduler (Scheduler : Common.Scheduler) = struct
     ;;
 
     let%expect_test "map_inplace" =
-      Scheduler.schedule scheduler ~monitor ~f:(fun parallel ->
+      Scheduler.parallel scheduler ~f:(fun parallel ->
         let bigstring = Base_bigstring.create 8 in
         int_kinds ~f:(fun kind ~of_int ~to_int:_ ->
           Bigstring.map_inplace
@@ -859,7 +1202,7 @@ module Test_scheduler (Scheduler : Common.Scheduler) = struct
     ;;
 
     let%expect_test "map_inplace" =
-      Scheduler.schedule scheduler ~monitor ~f:(fun parallel ->
+      Scheduler.parallel scheduler ~f:(fun parallel ->
         let bigstring = Base_bigstring.create 8 in
         int_kinds ~f:(fun kind ~of_int ~to_int:_ ->
           Bigstring.mapi_inplace
@@ -879,7 +1222,7 @@ module Test_scheduler (Scheduler : Common.Scheduler) = struct
 
     let%expect_test "iter" =
       let sum = Atomic.make 0 in
-      Scheduler.schedule scheduler ~monitor ~f:(fun parallel ->
+      Scheduler.parallel scheduler ~f:(fun parallel ->
         let bigstring = Base_bigstring.of_string "\000\001\002\003\004\005\006\007" in
         int_kinds ~f:(fun kind ~of_int:_ ~to_int ->
           Bigstring.iter parallel (Bigstring.with_kind_exn kind bigstring) ~f:(fun i ->
@@ -892,7 +1235,7 @@ module Test_scheduler (Scheduler : Common.Scheduler) = struct
 
     let%expect_test "iteri" =
       let sum = Atomic.make 0 in
-      Scheduler.schedule scheduler ~monitor ~f:(fun parallel ->
+      Scheduler.parallel scheduler ~f:(fun parallel ->
         let bigstring = Base_bigstring.of_string "\000\001\002\003\004\005\006\007" in
         int_kinds ~f:(fun kind ~of_int:_ ~to_int ->
           Bigstring.iteri
@@ -913,14 +1256,14 @@ module Test_scheduler (Scheduler : Common.Scheduler) = struct
     ;;
 
     let%expect_test "fold" =
-      Scheduler.schedule scheduler ~monitor ~f:(fun parallel ->
+      Scheduler.parallel scheduler ~f:(fun parallel ->
         let bigstring = Base_bigstring.of_string "\000\001\002\003\004\005\006\007" in
         int_kinds ~f:(fun kind ~of_int:_ ~to_int ->
           let list =
             Bigstring.fold
               parallel
               (Bigstring.with_kind_exn kind bigstring)
-              ~init:[]
+              ~init:(fun () : (_ : value mod portable unyielding) list -> [])
               ~f:(fun acc i -> i :: acc)
               ~combine:append
             |> List.map ~f:(fun i -> to_int i)
@@ -937,7 +1280,7 @@ module Test_scheduler (Scheduler : Common.Scheduler) = struct
     ;;
 
     let%expect_test "reduce" =
-      Scheduler.schedule scheduler ~monitor ~f:(fun parallel ->
+      Scheduler.parallel scheduler ~f:(fun parallel ->
         let bigstring = Base_bigstring.of_string "\000\001\002\003\004\005\006\007" in
         int_kinds ~f:(fun kind ~of_int ~to_int ->
           let option =
@@ -959,7 +1302,7 @@ module Test_scheduler (Scheduler : Common.Scheduler) = struct
     ;;
 
     let%expect_test "find" =
-      Scheduler.schedule scheduler ~monitor ~f:(fun parallel ->
+      Scheduler.parallel scheduler ~f:(fun parallel ->
         let bigstring = Base_bigstring.of_string "\000\001\002\003\004\005\006\007" in
         int_kinds ~f:(fun kind ~of_int:_ ~to_int ->
           let option =
@@ -985,8 +1328,31 @@ module Test_scheduler (Scheduler : Common.Scheduler) = struct
       fun bigstring -> Base_bigstring.to_bytes bigstring.data |> dump_bytes
     ;;
 
+    let%expect_test "splitting bigstring with parallel for over slices" =
+      Scheduler.parallel scheduler ~f:(fun parallel ->
+        let bigstring =
+          Arrays.Bigstring.init parallel (Int8, 10) ~f:(fun i ->
+            Int_repr.Int8.of_base_int_exn (i + 1))
+        in
+        let pivots = [: 1; 2; 3; 4; 5; 6; 7; 8; 9 :] in
+        let slice = Arrays.Bigstring.Slice.slice bigstring in
+        Arrays.Bigstring.Slice.for_ ~pivots parallel slice ~f:(fun _ slice ->
+          let bigstring = Arrays.Bigstring.of_slice slice in
+          let x = Arrays.Bigstring.get bigstring 0 in
+          Arrays.Bigstring.set
+            bigstring
+            0
+            Int_repr.Int8.(to_base_int x + 1 |> of_base_int_exn));
+        dump bigstring);
+      [%expect
+        {|
+        (bigstring
+         ("00000000  02 03 04 05 06 07 08 09  0a 0b                    |..........|"))
+        |}]
+    ;;
+
     let%expect_test "sort_inplace" =
-      Scheduler.schedule scheduler ~monitor ~f:(fun parallel ->
+      Scheduler.parallel scheduler ~f:(fun parallel ->
         int_kinds ~f:(fun kind ~of_int ~to_int ->
           let bigstring =
             Bigstring.init parallel (kind, 10) ~f:(fun i ->
@@ -1017,7 +1383,7 @@ module Test_scheduler (Scheduler : Common.Scheduler) = struct
     ;;
 
     let%expect_test "sort" =
-      Scheduler.schedule scheduler ~monitor ~f:(fun parallel ->
+      Scheduler.parallel scheduler ~f:(fun parallel ->
         int_kinds ~f:(fun kind ~of_int ~to_int ->
           let bigstring =
             Bigstring.init parallel (kind, 10) ~f:(fun i ->
@@ -1050,7 +1416,7 @@ module Test_scheduler (Scheduler : Common.Scheduler) = struct
     ;;
 
     let%expect_test "stable_sort_inplace" =
-      Scheduler.schedule scheduler ~monitor ~f:(fun parallel ->
+      Scheduler.parallel scheduler ~f:(fun parallel ->
         int_kinds ~f:(fun kind ~of_int ~to_int ->
           let bigstring =
             Bigstring.init parallel (kind, 10) ~f:(fun i ->
@@ -1081,7 +1447,7 @@ module Test_scheduler (Scheduler : Common.Scheduler) = struct
     ;;
 
     let%expect_test "stable_sort" =
-      Scheduler.schedule scheduler ~monitor ~f:(fun parallel ->
+      Scheduler.parallel scheduler ~f:(fun parallel ->
         int_kinds ~f:(fun kind ~of_int ~to_int ->
           let bigstring =
             Bigstring.init parallel (kind, 10) ~f:(fun i ->
@@ -1110,6 +1476,206 @@ module Test_scheduler (Scheduler : Common.Scheduler) = struct
           "00000020  24 00 00 00 00 00 00 00  28 00 00 00 00 00 00 00  |$.......(.......|"
           "00000030  29 00 00 00 00 00 00 00  2b 00 00 00 00 00 00 00  |).......+.......|"
           "00000040  40 00 00 00 00 00 00 00  62 00 00 00 00 00 00 00  |@.......b.......|"))
+        |}]
+    ;;
+
+    let%expect_test "scan_inplace" =
+      Scheduler.parallel scheduler ~f:(fun parallel ->
+        int_kinds ~f:(fun kind ~of_int ~to_int ->
+          let bigstring =
+            Bigstring.init parallel (kind, 10) ~f:(fun i ->
+              Base.Int.(hash i % 25) |> of_int)
+          in
+          let total =
+            Bigstring.scan_inplace parallel bigstring ~init:(of_int 0) ~f:(fun a b ->
+              to_int a + to_int b |> of_int)
+            |> to_int
+          in
+          dump bigstring;
+          print_s [%sexp ~~(total : int)])
+        [@nontail]);
+      [%expect
+        {|
+        (bigstring
+         ("00000000  00 0e 17 26 36 3e 49 60  67 79                    |...&6>I`gy|"))
+        (total 123)
+        (bigstring
+         ("00000000  00 00 0e 00 17 00 26 00  36 00 3e 00 49 00 60 00  |......&.6.>.I.`.|"
+          "00000010  67 00 79 00                                       |g.y.|"))
+        (total 123)
+        (bigstring
+         ("00000000  00 00 00 00 0e 00 00 00  17 00 00 00 26 00 00 00  |............&...|"
+          "00000010  36 00 00 00 3e 00 00 00  49 00 00 00 60 00 00 00  |6...>...I...`...|"
+          "00000020  67 00 00 00 79 00 00 00                           |g...y...|"))
+        (total 123)
+        (bigstring
+         ("00000000  00 00 00 00 00 00 00 00  0e 00 00 00 00 00 00 00  |................|"
+          "00000010  17 00 00 00 00 00 00 00  26 00 00 00 00 00 00 00  |........&.......|"
+          "00000020  36 00 00 00 00 00 00 00  3e 00 00 00 00 00 00 00  |6.......>.......|"
+          "00000030  49 00 00 00 00 00 00 00  60 00 00 00 00 00 00 00  |I.......`.......|"
+          "00000040  67 00 00 00 00 00 00 00  79 00 00 00 00 00 00 00  |g.......y.......|"))
+        (total 123)
+        |}]
+    ;;
+
+    let%expect_test "scan" =
+      Scheduler.parallel scheduler ~f:(fun parallel ->
+        int_kinds ~f:(fun kind ~of_int ~to_int ->
+          let bigstring =
+            Bigstring.init parallel (kind, 10) ~f:(fun i ->
+              Base.Int.(hash i % 25) |> of_int)
+          in
+          let bigstring, total =
+            Bigstring.scan parallel bigstring ~init:(of_int 0) ~f:(fun a b ->
+              to_int a + to_int b |> of_int)
+            |> Tuple2.map_snd ~f:to_int
+          in
+          dump bigstring;
+          print_s [%sexp ~~(total : int)])
+        [@nontail]);
+      [%expect
+        {|
+        (bigstring
+         ("00000000  00 0e 17 26 36 3e 49 60  67 79                    |...&6>I`gy|"))
+        (total 123)
+        (bigstring
+         ("00000000  00 00 0e 00 17 00 26 00  36 00 3e 00 49 00 60 00  |......&.6.>.I.`.|"
+          "00000010  67 00 79 00                                       |g.y.|"))
+        (total 123)
+        (bigstring
+         ("00000000  00 00 00 00 0e 00 00 00  17 00 00 00 26 00 00 00  |............&...|"
+          "00000010  36 00 00 00 3e 00 00 00  49 00 00 00 60 00 00 00  |6...>...I...`...|"
+          "00000020  67 00 00 00 79 00 00 00                           |g...y...|"))
+        (total 123)
+        (bigstring
+         ("00000000  00 00 00 00 00 00 00 00  0e 00 00 00 00 00 00 00  |................|"
+          "00000010  17 00 00 00 00 00 00 00  26 00 00 00 00 00 00 00  |........&.......|"
+          "00000020  36 00 00 00 00 00 00 00  3e 00 00 00 00 00 00 00  |6.......>.......|"
+          "00000030  49 00 00 00 00 00 00 00  60 00 00 00 00 00 00 00  |I.......`.......|"
+          "00000040  67 00 00 00 00 00 00 00  79 00 00 00 00 00 00 00  |g.......y.......|"))
+        (total 123)
+        |}]
+    ;;
+
+    let%expect_test "scan_inclusive_inplace" =
+      Scheduler.parallel scheduler ~f:(fun parallel ->
+        int_kinds ~f:(fun kind ~of_int ~to_int ->
+          let bigstring =
+            Bigstring.init parallel (kind, 10) ~f:(fun i ->
+              Base.Int.(hash i % 25) |> of_int)
+          in
+          Bigstring.scan_inclusive_inplace
+            parallel
+            bigstring
+            ~init:(of_int 0)
+            ~f:(fun a b -> to_int a + to_int b |> of_int);
+          dump bigstring)
+        [@nontail]);
+      [%expect
+        {|
+        (bigstring
+         ("00000000  0e 17 26 36 3e 49 60 67  79 7b                    |..&6>I`gy{|"))
+        (bigstring
+         ("00000000  0e 00 17 00 26 00 36 00  3e 00 49 00 60 00 67 00  |....&.6.>.I.`.g.|"
+          "00000010  79 00 7b 00                                       |y.{.|"))
+        (bigstring
+         ("00000000  0e 00 00 00 17 00 00 00  26 00 00 00 36 00 00 00  |........&...6...|"
+          "00000010  3e 00 00 00 49 00 00 00  60 00 00 00 67 00 00 00  |>...I...`...g...|"
+          "00000020  79 00 00 00 7b 00 00 00                           |y...{...|"))
+        (bigstring
+         ("00000000  0e 00 00 00 00 00 00 00  17 00 00 00 00 00 00 00  |................|"
+          "00000010  26 00 00 00 00 00 00 00  36 00 00 00 00 00 00 00  |&.......6.......|"
+          "00000020  3e 00 00 00 00 00 00 00  49 00 00 00 00 00 00 00  |>.......I.......|"
+          "00000030  60 00 00 00 00 00 00 00  67 00 00 00 00 00 00 00  |`.......g.......|"
+          "00000040  79 00 00 00 00 00 00 00  7b 00 00 00 00 00 00 00  |y.......{.......|"))
+        |}]
+    ;;
+
+    let%expect_test "scan_inclusive" =
+      Scheduler.parallel scheduler ~f:(fun parallel ->
+        int_kinds ~f:(fun kind ~of_int ~to_int ->
+          let bigstring =
+            Bigstring.init parallel (kind, 10) ~f:(fun i ->
+              Base.Int.(hash i % 25) |> of_int)
+          in
+          let bigstring =
+            Bigstring.scan_inclusive parallel bigstring ~init:(of_int 0) ~f:(fun a b ->
+              to_int a + to_int b |> of_int)
+          in
+          dump bigstring)
+        [@nontail]);
+      [%expect
+        {|
+        (bigstring
+         ("00000000  0e 17 26 36 3e 49 60 67  79 7b                    |..&6>I`gy{|"))
+        (bigstring
+         ("00000000  0e 00 17 00 26 00 36 00  3e 00 49 00 60 00 67 00  |....&.6.>.I.`.g.|"
+          "00000010  79 00 7b 00                                       |y.{.|"))
+        (bigstring
+         ("00000000  0e 00 00 00 17 00 00 00  26 00 00 00 36 00 00 00  |........&...6...|"
+          "00000010  3e 00 00 00 49 00 00 00  60 00 00 00 67 00 00 00  |>...I...`...g...|"
+          "00000020  79 00 00 00 7b 00 00 00                           |y...{...|"))
+        (bigstring
+         ("00000000  0e 00 00 00 00 00 00 00  17 00 00 00 00 00 00 00  |................|"
+          "00000010  26 00 00 00 00 00 00 00  36 00 00 00 00 00 00 00  |&.......6.......|"
+          "00000020  3e 00 00 00 00 00 00 00  49 00 00 00 00 00 00 00  |>.......I.......|"
+          "00000030  60 00 00 00 00 00 00 00  67 00 00 00 00 00 00 00  |`.......g.......|"
+          "00000040  79 00 00 00 00 00 00 00  7b 00 00 00 00 00 00 00  |y.......{.......|"))
+        |}]
+    ;;
+
+    let%expect_test "filter" =
+      Scheduler.parallel scheduler ~f:(fun parallel ->
+        int_kinds ~f:(fun kind ~of_int ~to_int ->
+          let bigstring =
+            Bigstring.init parallel (kind, 10) ~f:(fun i ->
+              Base.Int.(hash i % 100) |> of_int)
+          in
+          let bigstring =
+            Bigstring.filter parallel bigstring ~f:(fun a -> to_int a < 50)
+          in
+          dump bigstring)
+        [@nontail]);
+      [%expect
+        {|
+        (bigstring
+         ("00000000  22 28 29 21 24 07 2b 1b                           |\"()!$.+.|"))
+        (bigstring
+         ("00000000  22 00 28 00 29 00 21 00  24 00 07 00 2b 00 1b 00  |\".(.).!.$...+...|"))
+        (bigstring
+         ("00000000  22 00 00 00 28 00 00 00  29 00 00 00 21 00 00 00  |\"...(...)...!...|"
+          "00000010  24 00 00 00 07 00 00 00  2b 00 00 00 1b 00 00 00  |$.......+.......|"))
+        (bigstring
+         ("00000000  22 00 00 00 00 00 00 00  28 00 00 00 00 00 00 00  |\".......(.......|"
+          "00000010  29 00 00 00 00 00 00 00  21 00 00 00 00 00 00 00  |).......!.......|"
+          "00000020  24 00 00 00 00 00 00 00  07 00 00 00 00 00 00 00  |$...............|"
+          "00000030  2b 00 00 00 00 00 00 00  1b 00 00 00 00 00 00 00  |+...............|"))
+        |}]
+    ;;
+
+    let%expect_test "filteri" =
+      Scheduler.parallel scheduler ~f:(fun parallel ->
+        int_kinds ~f:(fun kind ~of_int ~to_int ->
+          let bigstring =
+            Bigstring.init parallel (kind, 10) ~f:(fun i ->
+              Base.Int.(hash i % 100) |> of_int)
+          in
+          let bigstring =
+            Bigstring.filteri parallel bigstring ~f:(fun i a -> i >= 5 && to_int a < 50)
+          in
+          dump bigstring)
+        [@nontail]);
+      [%expect
+        {|
+        (bigstring
+         ("00000000  24 07 2b 1b                                       |$.+.|"))
+        (bigstring
+         ("00000000  24 00 07 00 2b 00 1b 00                           |$...+...|"))
+        (bigstring
+         ("00000000  24 00 00 00 07 00 00 00  2b 00 00 00 1b 00 00 00  |$.......+.......|"))
+        (bigstring
+         ("00000000  24 00 00 00 00 00 00 00  07 00 00 00 00 00 00 00  |$...............|"
+          "00000010  2b 00 00 00 00 00 00 00  1b 00 00 00 00 00 00 00  |+...............|"))
         |}]
     ;;
   end

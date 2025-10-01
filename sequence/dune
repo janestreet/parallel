@@ -1,6 +1,6 @@
 (library
  (name parallel_sequence)
  (public_name parallel.sequence)
- (libraries pair_or_null parallel_kernel)
  (preprocess
-  (pps ppx_jane)))
+  (pps ppx_jane ppx_fuelproof))
+ (libraries pair_or_null parallel_kernel))

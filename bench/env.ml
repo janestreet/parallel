@@ -1,14 +1,16 @@
 open! Base
 
 type t =
-  | Domains
+  | Max_domains
   | Grain
   | Length
+  | Eager
 
 let to_string = function
-  | Domains -> "PARALLEL_BENCH_DOMAINS"
+  | Max_domains -> "PARALLEL_BENCH_MAX_DOMAINS"
   | Grain -> "PARALLEL_BENCH_GRAIN"
   | Length -> "PARALLEL_BENCH_LENGTH"
+  | Eager -> "PARALLEL_BENCH_EAGER"
 ;;
 
 let get t ~default =
@@ -17,6 +19,7 @@ let get t ~default =
   | Some i -> Int.of_string i
 ;;
 
-let domains = get Domains ~default:4
+let max_domains = get Max_domains ~default:4096
 let grain = get Grain ~default:16
 let length = get Length ~default:1_000_000
+let eager = get Eager ~default:0

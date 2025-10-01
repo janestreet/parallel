@@ -18,8 +18,8 @@ external unsafe_of_value
 [@@noalloc] [@@builtin] [@@no_effects] [@@no_coeffects]
 
 external unsafe_to_value
-  :  'a t @ once
-  -> 'a @ once
+  :  'a t
+  -> 'a
   @@ portable
   = "caml_native_pointer_to_value_bytecode" "caml_native_pointer_to_value"
 [@@noalloc] [@@builtin] [@@no_effects] [@@no_coeffects]
@@ -38,5 +38,27 @@ let[@inline] unsafe_with_value (type a) (a : a) ~f = exclave_
 
 let%template[@inline] use t ~f = exclave_
   f (if equal t (null ()) then None else Some (unsafe_to_value t))
-[@@kind k = (value, word)]
+[@@kind k = (value, word & value)]
 ;;
+
+module Imm = struct
+  type 'a ptr = 'a t
+  type 'a t = int
+
+  let null = 0
+
+  external of_i64
+    :  int64#
+    -> 'a t
+    @@ portable
+    = "%reinterpret_unboxed_int64_as_tagged_int63"
+
+  let[@inline] of_ptr ptr = of_i64 (Int64_u.of_nativeint (to_nativeint ptr))
+
+  external to_ptr
+    :  'a t
+    -> 'a ptr
+    @@ portable
+    = "caml_ext_pointer_as_native_pointer_bytecode" "caml_ext_pointer_as_native_pointer"
+  [@@noalloc] [@@builtin] [@@no_effects] [@@no_coeffects]
+end

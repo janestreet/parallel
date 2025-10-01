@@ -1,9 +1,10 @@
 (library
  (foreign_stubs
   (language c)
-  (names stack_pointer_stubs heartbeat_stubs))
+  (names stack_pointer_stubs parallel_stubs))
  (name parallel_kernel)
  (public_name parallel.kernel)
- (libraries base oxcaml_effect pair_or_null portable unique)
+ (libraries await base concurrent oxcaml_effect unboxed.int64_u pair_or_null
+   portable unique)
  (preprocess
-  (pps ppx_jane)))
+  (pps ppx_jane ppx_fuelproof)))
