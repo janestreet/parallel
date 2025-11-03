@@ -64,7 +64,7 @@ let rec fib parallel n =
   match n with
   | 0 | 1 -> 1
   | n ->
-    let a, b =
+    let #(a, b) =
       Parallel.fork_join2
         parallel
         (fun parallel -> fib parallel (n - 1))
