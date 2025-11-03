@@ -665,7 +665,7 @@ if they could be called in parallel:
 ```ocaml
 let beat_the_system par =
   let t = { price = 42.0; mood = Neutral } in
-  let (), () =
+  let #((), ()) =
     Parallel.fork_join2 par
       (fun _par -> bum_out t)
       (fun _par -> cheer_up t)
@@ -794,7 +794,7 @@ race by it, adding a few things for illustration:
 let beat_the_system par =
   let t @ uncontended = { price = 42.0; mood = Neutral } in
   cheer_up t; (* line A *)
-  let (), () =
+  let #((), ()) =
     Parallel.fork_join2 par
       (fun _par -> bum_out t) (* line B *)
       (fun _par -> cheer_up t) (* line C *)
