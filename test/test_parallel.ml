@@ -35,7 +35,7 @@ let rec fib_par parallel n =
 ;;
 
 module Test_scheduler (Scheduler : Parallel.Scheduler.S) = struct
-  let scheduler = (Scheduler.create [@alert "-experimental"]) ()
+  let scheduler = Scheduler.create ()
 
   let%expect_test "fib4" =
     Scheduler.parallel scheduler ~f:(fun parallel -> printf "%d" (fib4 parallel));
@@ -105,49 +105,39 @@ module Test_scheduler (Scheduler : Parallel.Scheduler.S) = struct
   ;;
 
   let%expect_test "for" =
-    List.iter [ 1; 5; 10; 13 ] ~f:(fun grain ->
-      Scheduler.parallel scheduler ~f:(fun parallel ->
-        let a = Atomic.make 0 in
-        Parallel.for_ ~grain parallel ~start:0 ~stop:10 ~f:(fun _ i -> Atomic.add a i);
-        printf "%d" (Atomic.get a));
-      [%expect {| 45 |}])
-  ;;
-
-  let%expect_test "for invalid grain" =
-    Expect_test_helpers_core.require_does_raise (fun () ->
-      Scheduler.parallel scheduler ~f:(fun parallel ->
-        Parallel.for_ ~grain:0 parallel ~start:0 ~stop:0 ~f:(fun _ _ -> ())));
-    [%expect {| (Invalid_argument "grain < 1") |}]
+    Scheduler.parallel scheduler ~f:(fun parallel ->
+      let a = Atomic.make 0 in
+      Parallel.for_ parallel ~start:0 ~stop:10 ~f:(fun _ i -> Atomic.add a i);
+      printf "%d" (Atomic.get a));
+    [%expect {| 45 |}]
   ;;
 
   let%expect_test "fold" =
-    List.iter [ 1; 5; 10; 13 ] ~f:(fun grain ->
-      Scheduler.parallel scheduler ~f:(fun parallel ->
-        let fold_n n =
-          Parallel.fold
-            ~grain
-            parallel
-            ~init:(fun () -> 0)
-            ~state:((~start:0, ~stop:n) : start:int * stop:int)
-            ~next:(fun _ acc (~start, ~stop) ->
-              if start = stop
-              then Pair_or_null.none ()
-              else Pair_or_null.some (acc + 1) (~start:(start + 1), ~stop))
-            ~stop:(fun _ i -> i)
-            ~fork:(fun _ (~start, ~stop) ->
-              let pivot = start + ((stop - start) / 2) in
-              if pivot < start + grain
-              then Pair_or_null.none ()
-              else Pair_or_null.some (~start, ~stop:pivot) (~start:pivot, ~stop))
-            ~join:(fun _ a b -> a + b)
-        in
-        printf "%d\n" (fold_n 10);
-        printf "%d\n" (fold_n 10_000));
-      [%expect
-        {|
-        10
-        10000
-        |}])
+    Scheduler.parallel scheduler ~f:(fun parallel ->
+      let fold_n n =
+        Parallel.fold
+          parallel
+          ~init:(fun () -> 0)
+          ~state:((~start:0, ~stop:n) : start:int * stop:int)
+          ~next:(fun _ acc (~start, ~stop) ->
+            if start = stop
+            then Pair_or_null.none ()
+            else Pair_or_null.some (acc + 1) (~start:(start + 1), ~stop))
+          ~stop:(fun _ i -> i)
+          ~fork:(fun _ (~start, ~stop) ->
+            let pivot = start + ((stop - start) / 2) in
+            if pivot <= start + 1
+            then Pair_or_null.none ()
+            else Pair_or_null.some (~start, ~stop:pivot) (~start:pivot, ~stop))
+          ~join:(fun _ a b -> a + b)
+      in
+      printf "%d\n" (fold_n 10);
+      printf "%d\n" (fold_n 10_000));
+    [%expect
+      {|
+      10
+      10000
+      |}]
   ;;
 
   let%expect_test "fold with treevec state" =
@@ -162,46 +152,29 @@ module Test_scheduler (Scheduler : Parallel.Scheduler.S) = struct
         | Node (a, b) -> collect a @ collect b
       ;;
     end in
-    List.iter [ 1; 5; 10; 13 ] ~f:(fun grain ->
-      Scheduler.parallel scheduler ~f:(fun parallel ->
-        let fold_n n =
-          Parallel.fold
-            ~grain
-            parallel
-            ~init:(fun () : int Vec.t -> Vec.create ())
-            ~state:((~start:0, ~stop:n) : start:int * stop:int)
-            ~next:(fun _ acc (~start, ~stop) ->
-              if start = stop
-              then Pair_or_null.none ()
-              else (
-                Vec.push_back acc start;
-                Pair_or_null.some acc (~start:(start + 1), ~stop)))
-            ~stop:(fun _ vec -> Leaf vec)
-            ~fork:(fun _ (~start, ~stop) ->
-              let pivot = start + ((stop - start) / 2) in
-              if pivot < start + grain
-              then Pair_or_null.none ()
-              else Pair_or_null.some (~start, ~stop:pivot) (~start:pivot, ~stop))
-            ~join:(fun _ a b -> Node (a, b))
-        in
-        print_s [%message (collect (fold_n 10) : int list)];
-        assert (List.equal Int.equal (collect (fold_n 10_000)) (List.init 10_000 ~f:Fn.id)));
-      [%expect {| ("collect (fold_n 10)" (0 1 2 3 4 5 6 7 8 9)) |}])
-  ;;
-
-  let%expect_test "fold invalid grain" =
-    Expect_test_helpers_core.require_does_raise (fun () ->
-      Scheduler.parallel scheduler ~f:(fun parallel ->
+    Scheduler.parallel scheduler ~f:(fun parallel ->
+      let fold_n n =
         Parallel.fold
-          ~grain:0
           parallel
-          ~init:(fun () -> ())
-          ~state:()
-          ~next:(fun _ () () -> Pair_or_null.none ())
-          ~stop:(fun _ () -> ())
-          ~fork:(fun _ () -> Pair_or_null.none ())
-          ~join:(fun _ () () -> ())));
-    [%expect {| (Invalid_argument "grain < 1") |}]
+          ~init:(fun () : int Vec.t -> Vec.create ())
+          ~state:((~start:0, ~stop:n) : start:int * stop:int)
+          ~next:(fun _ acc (~start, ~stop) ->
+            if start = stop
+            then Pair_or_null.none ()
+            else (
+              Vec.push_back acc start;
+              Pair_or_null.some acc (~start:(start + 1), ~stop)))
+          ~stop:(fun _ vec -> Leaf vec)
+          ~fork:(fun _ (~start, ~stop) ->
+            let pivot = start + ((stop - start) / 2) in
+            if pivot <= start + 1
+            then Pair_or_null.none ()
+            else Pair_or_null.some (~start, ~stop:pivot) (~start:pivot, ~stop))
+          ~join:(fun _ a b -> Node (a, b))
+      in
+      print_s [%message (collect (fold_n 10) : int list)];
+      assert (List.equal Int.equal (collect (fold_n 10_000)) (List.init 10_000 ~f:Fn.id)));
+    [%expect {| ("collect (fold_n 10)" (0 1 2 3 4 5 6 7 8 9)) |}]
   ;;
 end
 

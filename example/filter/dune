@@ -2,6 +2,6 @@
  (modes byte exe)
  (names filter)
  (libraries await await.blocking core_unix.command_unix core parallel
-   parallel_scheduler_work_stealing portable core_unix.time_stamp_counter)
+   parallel_scheduler portable core_unix.time_stamp_counter)
  (preprocess
   (pps ppx_jane)))

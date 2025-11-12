@@ -16,7 +16,7 @@ let rec fib_par parallel n =
 
 module Test_scheduler (Scheduler : Parallel.Scheduler.S) = struct
   let%expect_test "exceptions" =
-    let scheduler = (Scheduler.create [@alert "-experimental"]) () in
+    let scheduler = Scheduler.create () in
     Scheduler.stop scheduler;
     Expect_test_helpers_core.require_does_raise (fun () -> Scheduler.stop scheduler);
     [%expect {| (Failure "The scheduler is already stopped") |}];
@@ -27,7 +27,7 @@ module Test_scheduler (Scheduler : Parallel.Scheduler.S) = struct
 
   let%expect_test "stop doesn't deadlock" =
     for _ = 1 to 1000 do
-      let scheduler = (Scheduler.create [@alert "-experimental"]) () in
+      let scheduler = Scheduler.create () in
       Scheduler.parallel scheduler ~f:(fun parallel -> ignore (fib_par parallel 2 : int));
       Scheduler.stop scheduler
     done

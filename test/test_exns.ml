@@ -17,30 +17,26 @@ let run sched ~f =
       let scheduler = Parallel.Scheduler.Sequential.create () in
       Parallel.Scheduler.Sequential.parallel scheduler ~f
     | Work_stealing ->
-      let scheduler =
-        (Parallel_scheduler_work_stealing.create [@alert "-experimental"]) ()
-      in
-      Parallel_scheduler_work_stealing.parallel scheduler ~f;
-      Parallel_scheduler_work_stealing.stop scheduler
+      let scheduler = Parallel_scheduler.create () in
+      Parallel_scheduler.parallel scheduler ~f;
+      Parallel_scheduler.stop scheduler
   with
   | exn -> printf "Top level: %s\n" (Exn.to_string exn)
 ;;
 
 let run_concurrent ~terminator ~f =
-  let scheduler = (Parallel_scheduler_work_stealing.create [@alert "-experimental"]) () in
-  (try
-     Parallel_scheduler_work_stealing.concurrent scheduler ~terminator ~f [@nontail]
-   with
+  let scheduler = Parallel_scheduler.create () in
+  (try Parallel_scheduler.concurrent scheduler ~terminator ~f [@nontail] with
    | exn -> printf "Top level: %s\n" (Exn.to_string exn));
-  Parallel_scheduler_work_stealing.stop scheduler
+  Parallel_scheduler.stop scheduler
 ;;
 
 let run_concurrent_scheduler ~f =
-  let scheduler = (Parallel_scheduler_work_stealing.create [@alert "-experimental"]) () in
-  let concurrent = Parallel_scheduler_work_stealing.Expert.scheduler scheduler in
+  let scheduler = Parallel_scheduler.create () in
+  let concurrent = Parallel_scheduler.Expert.scheduler scheduler in
   (try f concurrent with
    | exn -> printf "Top level: %s\n" (Exn.to_string exn));
-  Parallel_scheduler_work_stealing.stop scheduler
+  Parallel_scheduler.stop scheduler
 ;;
 
 let%expect_test "raise" =
@@ -230,8 +226,8 @@ let%expect_test "array init" =
 let%expect_test "array map" =
   let open Parallel.Arrays in
   run Seq ~f:(fun parallel ->
-    let array = Array.init parallel 1 ~f:(fun _ -> 0) in
-    let _ : _ = Array.map parallel array ~f:(fun _ -> failwith "fail") in
+    let array = Array.init parallel 1 ~f:(fun _ _ -> 0) in
+    let _ : _ = Array.map parallel array ~f:(fun _ _ -> failwith "fail") in
     ());
   [%expect {| Top level: (Failure fail) |}]
 ;;
@@ -239,8 +235,8 @@ let%expect_test "array map" =
 let%expect_test "array map2" =
   let open Parallel.Arrays in
   run Seq ~f:(fun parallel ->
-    let array = Array.init parallel 1 ~f:(fun _ -> 0) in
-    let _ : _ = Array.map2_exn parallel array array ~f:(fun _ _ -> failwith "fail") in
+    let array = Array.init parallel 1 ~f:(fun _ _ -> 0) in
+    let _ : _ = Array.map2_exn parallel array array ~f:(fun _ _ _ -> failwith "fail") in
     ());
   [%expect {| Top level: (Failure fail) |}]
 ;;

@@ -1,0 +1,6 @@
+(library
+ (name parallel_async)
+ (public_name parallel.async)
+ (libraries async_kernel await concurrent core parallel_kernel)
+ (preprocess
+  (pps ppx_jane)))

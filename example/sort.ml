@@ -28,7 +28,7 @@ let partition slice =
 
 (* $MDX part-end *)
 
-module Sequential = struct
+module%test Sequential = struct
   (* $MDX part-begin=sort-sequential *)
   let rec quicksort slice =
     if Slice.length slice > 1
@@ -48,7 +48,7 @@ module Sequential = struct
   ;;
 end
 
-module Parallel = struct
+module%test Parallel = struct
   (* $MDX part-begin=sort-parallel *)
   let rec quicksort parallel slice =
     if Slice.length slice > 1
@@ -69,7 +69,7 @@ module Parallel = struct
 
   (* $MDX part-begin=quicksort-parallel *)
   let quicksort ~scheduler ~mutex array =
-    Parallel_scheduler_work_stealing.parallel scheduler ~f:(fun parallel ->
+    Parallel_scheduler.parallel scheduler ~f:(fun parallel ->
       Await_blocking.with_await Await.Terminator.never ~f:(fun await ->
         Capsule.Mutex.with_lock await mutex ~f:(fun access ->
           let array = Par_array.of_array (Capsule.Data.unwrap ~access array) in
@@ -82,9 +82,7 @@ module Parallel = struct
 
   let%bench_fun "parallel" =
     let max_domains = Sys.getenv "MAX_DOMAINS" |> Option.bind ~f:Int.of_string_opt in
-    let scheduler =
-      (Parallel_scheduler_work_stealing.create [@alert "-experimental"]) ?max_domains ()
-    in
+    let scheduler = Parallel_scheduler.create ?max_domains () in
     let (P mutex) = Capsule.Mutex.create () in
     let array =
       Capsule.Data.create (fun () -> Array.init 10_000 ~f:(fun _ -> Random.int 10_000))

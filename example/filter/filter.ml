@@ -24,11 +24,11 @@ let blur_at image ~x ~y =
 
 (* $MDX part-begin=filter-mutex *)
 let filter ~scheduler ~mutex image =
-  Parallel_scheduler_work_stealing.parallel scheduler ~f:(fun parallel ->
-    let width = Image.width (Capsule.Data.get_id_contended image) in
-    let height = Image.height (Capsule.Data.get_id_contended image) in
+  Parallel_scheduler.parallel scheduler ~f:(fun parallel ->
+    let width = Image.width (Capsule.Data.get_id image) in
+    let height = Image.height (Capsule.Data.get_id image) in
     let data =
-      Parallel_array.init parallel (width * height) ~f:(fun i ->
+      Parallel_array.init parallel (width * height) ~f:(fun _ i ->
         let x = i % width in
         let y = i / width in
         Await_blocking.with_await Await.Terminator.never ~f:(fun await ->
@@ -43,11 +43,11 @@ let filter ~scheduler ~mutex image =
 
 (* $MDX part-begin=filter-key *)
 let filter ~scheduler ~key image =
-  Parallel_scheduler_work_stealing.parallel scheduler ~f:(fun parallel ->
-    let width = Image.width (Capsule.Data.get_id_contended image) in
-    let height = Image.height (Capsule.Data.get_id_contended image) in
+  Parallel_scheduler.parallel scheduler ~f:(fun parallel ->
+    let width = Image.width (Capsule.Data.get_id image) in
+    let height = Image.height (Capsule.Data.get_id image) in
     let data =
-      Parallel_array.init parallel (width * height) ~f:(fun i ->
+      Parallel_array.init parallel (width * height) ~f:(fun _ i ->
         let x = i % width in
         let y = i / width in
         (Capsule.Expert.Key.access_shared key ~f:(fun access ->
@@ -68,11 +68,7 @@ let command =
         flag "max-domains" (optional int) ~doc:"INT maximum domain count"
       in
       fun () ->
-        let scheduler =
-          (Parallel_scheduler_work_stealing.create [@alert "-experimental"])
-            ?max_domains
-            ()
-        in
+        let scheduler = Parallel_scheduler.create ?max_domains () in
         let (P key) = Capsule.Expert.create () in
         let image = Capsule.Data.create (fun () -> Image.load file) in
         let start = Time_stamp_counter.now () in

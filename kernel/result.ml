@@ -28,11 +28,15 @@ let[@inline] globalize = function
 module Capsule = struct
   module Capsule = Portable.Capsule.Expert
 
-  type%fuelproof 'a t : value mod contended portable unyielding =
+  type%fuelproof 'a t : value mod contended forkable many portable unyielding =
     | Ok :
-        ('a, 'k) Capsule.Data.t @@ aliased global unyielding * 'k Capsule.Key.t @@ global
+        ('a, 'k) Capsule.Data.t @@ aliased forkable global many unyielding
+        * 'k Capsule.Key.t @@ global
         -> 'a t
-    | Exn of Exn.t @@ aliased global unyielding * Backtrace.t @@ aliased global
+    | Exn of
+        Exn.t @@ aliased forkable global many unyielding
+        * Backtrace.t @@ aliased global many
+  [@@allow_redundant_modalities]
 
   let[@inline] try_with f = exclave_
     let (P key) = Capsule.create () in

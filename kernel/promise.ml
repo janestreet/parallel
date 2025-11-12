@@ -13,28 +13,29 @@ include Parallel_kernel0.Promise
     - Ready -> Blocking
 
     {v
-  +----------+------------+------------+-------------+---------------+
-  | Action   | Old State  | New State  | Final State | Result        |
-  +----------+------------+------------+-------------+---------------+
-  | Create   |            | Start f    | Start f     |               |
-  | Apply    | Start f    | Claimed    | Claimed     | Fill (f ())   |
-  | Apply    | Claimed    | Claimed    | Claimed     |               |
-  | Await    | Start f    | Claimed    | Claimed     | return (f ()) |
-  | Await    | Claimed    | Claimed    | Claimed     | Suspend       |
-  | Await    | Ready a    | Ready a    | Claimed     | return a      |
-  | Fill     | Claimed    | Ready a    | Ready a     |               |
-  | Fill     | Blocking k | Ready a    | Claimed     | continue k a  |
-  | Suspend  | Claimed    | Blocking k | Blocking k  |               |
-  | Suspend  | Ready a    | Blocking k | Claimed     | continue k a  |
-  +----------+------------+------------+--+--------------------------+
+  +-----------+------------+------------+-------------+--------------+
+  | Action    | Old State  | New State  | Final State | Result       |
+  +-----------+------------+------------+-------------+--------------+
+  | Create    |            | Start      | Start       |              |
+  | Apply f   | Start      | Claimed    | Claimed     | Fill (f ())  |
+  | Apply f   | Claimed    | Claimed    | Claimed     |              |
+  | Await f   | Start      | Claimed    | Claimed     | f ()         |
+  | Await f   | Claimed    | Claimed    | Claimed     | Suspend cc   |
+  | Await f   | Ready a    | Ready a    | Claimed     | a            |
+  | Fill a    | Claimed    | Ready a    | Ready a     |              |
+  | Fill a    | Blocking k | Ready a    | Claimed     | promote k a  |
+  | Suspend k | Claimed    | Blocking k | Blocking k  |              |
+  | Suspend k | Ready a    | Blocking k | Claimed     | continue k a |
+  +-----------+------------+------------+--+-------------------------+
     v} *)
 
 type%fuelproof 'k suspension : value mod portable =
   | Done
   | Trigger of
-      Await.Trigger.t @@ aliased global * (unit continuation, 'k) Capsule.Data.t @@ global
+      Await.Trigger.t @@ aliased global many
+      * (unit continuation, 'k) Capsule.Data.t @@ global
   | Promise :
-      'a t @@ aliased global
+      'a t @@ aliased global many
       * ('a Result.Capsule.t continuation, 'k) Capsule.Data.t @@ global
       -> 'k suspension
 

@@ -1,6 +1,6 @@
 (library
  (name parallel_bench)
  (public_name parallel.bench)
- (libraries parallel parallel_scheduler_work_stealing portable threads)
+ (libraries parallel parallel_scheduler portable threads)
  (preprocess
   (pps ppx_jane)))

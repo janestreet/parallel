@@ -2,7 +2,7 @@ open! Base
 open! Import
 
 module Test_scheduler (Scheduler : Parallel.Scheduler.S) = struct
-  let scheduler = (Scheduler.create [@alert "-experimental"]) ()
+  let scheduler = Scheduler.create ()
 
   module Test_intf (Seq : Parallel.Sequence.S) = struct
     (* Adapted from base/test/test_sequence.ml *)
@@ -105,8 +105,8 @@ module Test_scheduler (Scheduler : Parallel.Scheduler.S) = struct
     end
   end
 
-  module Test_without_length = Test_intf (Parallel.Sequence)
-  module Test_with_length = Test_intf (Parallel.Sequence.With_length)
+  module%test Test_without_length = Test_intf (Parallel.Sequence)
+  module%test Test_with_length = Test_intf (Parallel.Sequence.With_length)
 end
 
 include Common.Test_schedulers (Test_scheduler)

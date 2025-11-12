@@ -1,6 +1,6 @@
 (library
- (name parallel_scheduler_work_stealing)
- (public_name parallel.scheduler.work_stealing)
+ (name parallel_scheduler)
+ (public_name parallel.scheduler)
  (libraries await await.blocking await.spinning base concurrent
    parallel_kernel portable portable_ws_deque threads unique)
  (preprocess

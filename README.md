@@ -14,7 +14,7 @@ To expose an opportunity for parallelism, user code calls a `fork_join` function
 val fork_join2
   :  t @ local
   -> (t @ local -> 'a) @ local once
-  -> (t @ local -> 'b) @ once portable unyielding
+  -> (t @ local -> 'b) @ once portable
   -> #('a * 'b)
 ```
 
@@ -30,7 +30,7 @@ separate scheduler library. Schedulers provide the following function:
 ```ocaml
   (** [parallel t ~f] creates an implementation of parallelism backed by [t], applies [f],
       and waits for it to complete. *)
-  val parallel : t -> f:(parallel @ local -> 'a) @ once portable unyielding -> 'a
+  val parallel : t -> f:(parallel @ local -> 'a) @ forkable once portable unyielding -> 'a
 ```
 
 Calling `schedule` provides your parallel computation with a local `Parallel.t`
@@ -40,7 +40,7 @@ The currently available schedulers are:
 
 - `Parallel.Sequential`, which runs all tasks on the domain that created it.
 
-- `Parallel_scheduler_work_stealing`, which creates a pool of worker domains that
+- `Parallel_scheduler`, which creates a pool of worker domains that
   pull tasks from per-domain work-stealing dequeues.
 
 # Concurrency
@@ -80,9 +80,9 @@ let fib_sequential n =
 ;;
 
 let fib_parallel n =
-  let scheduler = Parallel_scheduler_work_stealing.create () in
-  Parallel_scheduler_work_stealing.parallel scheduler ~f:(fun parallel ->
+  let scheduler = Parallel_scheduler.create () in
+  Parallel_scheduler.parallel scheduler ~f:(fun parallel ->
     printf "%d" (fib parallel n));
-  Parallel_scheduler_work_stealing.stop scheduler
+  Parallel_scheduler.stop scheduler
 ;;
 ```

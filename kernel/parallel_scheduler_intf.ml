@@ -5,10 +5,9 @@ module type S = sig
   type parallel : value mod contended portable
   type t
 
-  val create
-    :  ?max_domains:(int[@ocaml.doc {| default: [Multicore.max_domains ()] |}])
-    -> unit
-    -> t
+  (** [create ~max_domains ()] creates a scheduler that spawns worker threads on no more
+      than [max_domains] domains. *)
+  val create : ?max_domains:int (** default: [Multicore.max_domains ()] *) -> unit -> t
 
   (** [stop t] waits for pending tasks to complete and joins all worker domains.
       Attempting to schedule new tasks after calling [stop] will raise.
@@ -23,7 +22,7 @@ module type S = sig
 
   (** [parallel t ~f] creates an implementation of parallelism backed by [t], applies [f],
       and waits for it to complete. *)
-  val parallel : t -> f:(parallel @ local -> 'a) @ once portable unyielding -> 'a
+  val parallel : t -> f:(parallel @ local -> 'a) @ forkable once portable unyielding -> 'a
 
   (* $MDX part-end *)
 end
@@ -37,11 +36,16 @@ module type S_concurrent = sig
 
       There is currently no mechanism to limit the creation rate of concurrent tasks. If
       concurrent work is generated faster than it can be executed, the scheduler's queues
-      will grow unboundedly, leading to resource exhaustion. *)
+      will grow unboundedly, leading to resource exhaustion.
+
+      Running a concurrent task requires allocating a fiber, which consumes a significant
+      chunk of memory and address space (similar to a thread). There is a lighter-weight
+      implementation of fibers based on stack checks, but it is not currently available. *)
   val concurrent
     :  t
     -> terminator:Await.Terminator.t @ local
-    -> f:(parallel Concurrent.t @ local portable -> 'a) @ once portable unyielding
+    -> f:(parallel Concurrent.t @ local portable -> 'a)
+       @ forkable once portable unyielding
     -> 'a
 
   module Expert : sig

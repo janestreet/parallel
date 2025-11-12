@@ -29,3 +29,17 @@ let%expect_test ("sequential scheduler doesn't allocate" [@tags "fast-flambda"])
       assert (x + y = 2)));
   [%expect {| |}]
 ;;
+
+let%expect_test ("fork_join doesn't allocate" [@tags "fast-flambda"]) =
+  let scheduler = Parallel.Scheduler.Sequential.create () in
+  Expect_test_helpers_core.require_no_allocation_local ~cr:CR_someday (fun () ->
+    Parallel.Scheduler.Sequential.parallel scheduler ~f:(fun parallel ->
+      let [ x; y; z ] =
+        Parallel.fork_join parallel [ (fun _ -> 1); (fun _ -> 1); (fun _ -> 1) ]
+      in
+      assert (x + y + z = 3)));
+  [%expect
+    {|
+    ("allocation exceeded limit" (allocation_limit (Minor_words 0)))
+    |}]
+;;

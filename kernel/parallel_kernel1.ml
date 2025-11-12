@@ -37,7 +37,6 @@ let with_parallel f ~scheduler ~tokens ~password ~handler = exclave_
     Capsule.Data.Local.create (fun [@inline] () : Parallel_kernel0.Runqueue.t -> exclave_
       stack_
         { tokens
-        ; promoting = false
         ; head = Q (Stack_pointer.null ())
         ; cursor = Q (Stack_pointer.null ())
         ; scheduler

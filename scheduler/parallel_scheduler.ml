@@ -2,11 +2,9 @@ open! Base
 open Await
 open Parallel_kernel
 module Atomic = Portable.Atomic
-module Capsule = Portable.Capsule
 module Sequential = Scheduler.Sequential
 module Scheduler = For_scheduler
 module Result = Scheduler.Result.Capsule
-module DLS = Basement.Stdlib_shim.Domain.Safe.DLS
 
 (* Given N total domains, queue 0 is used by the initial domain and queues
    1..N-1 are used by worker domains. *)
@@ -17,7 +15,6 @@ type t =
       }
   | Multi_domain of
       { queues : Work_deqs.t
-      ; self : Work_deqs.Self.t DLS.key
       ; stop : bool Atomic.t
       ; stopped : Countdown_latch.t
       }
@@ -35,10 +32,8 @@ let stop t =
       Thread.yield ()
     done;
     Sequential.stop sequential
-  | Multi_domain { queues; self; stop; stopped } ->
-    (* See [create] *)
-    let self = Obj.magic_uncontended (DLS.get self) in
-    Work_deqs.work queues ~self ~idx:0 ~break:(fun () -> true);
+  | Multi_domain { queues; stop; stopped } ->
+    Work_deqs.work queues ~break:(fun () -> true);
     Atomic.set stop true;
     for i = 1 to Work_deqs.length queues - 1 do
       Work_deqs.wake queues ~idx:i
@@ -54,23 +49,14 @@ let create ?max_domains () =
     let default = Multicore.max_domains () in
     Option.value_map max_domains ~f:(Int.min default) ~default
   in
-  if domains < 1 then invalid_arg "Parallel_scheduler_work_stealing.create";
+  if domains < 1 then invalid_arg "Parallel_scheduler.create";
   match domains with
   | 1 -> Single_domain { sequential = Sequential.create (); threads = Atomic.make 0 }
   | _ ->
     let stop_flag = Atomic.make false in
-    let owners, queues = Work_deqs.create ~domains in
-    let owner idx =
-      let { many = owner } = Unique.Once.Atomic.get_exn (Iarray.get owners idx) in
-      Capsule.Isolated.unwrap owner
-    in
-    let self =
-      (* Usage of this key is thread-safe because only one thread per domain has access to
-         the key, we do not yield while accessing the queue, and we do not borrow queues. *)
-      DLS.new_key (fun _ -> owner (Multicore.current_domain ()))
-    in
+    let queues = Work_deqs.create ~domains in
     let stopped = Countdown_latch.create 1 in
-    let t = Multi_domain { queues; self; stop = stop_flag; stopped } in
+    let t = Multi_domain { queues; stop = stop_flag; stopped } in
     (* [create] is [nonportable], so we are on domain 0. *)
     for idx = 1 to domains - 1 do
       Countdown_latch.incr stopped;
@@ -78,9 +64,7 @@ let create ?max_domains () =
         Multicore.spawn_on
           ~domain:idx
           (fun () ->
-            (* See [create] *)
-            let self = Obj.magic_uncontended (DLS.get self) in
-            Work_deqs.work queues ~self ~idx ~break:(fun () -> Atomic.get stop_flag);
+            Work_deqs.work queues ~break:(fun () -> Atomic.get stop_flag);
             Countdown_latch.decr stopped)
           ()
       with
@@ -94,18 +78,12 @@ let create ?max_domains () =
     t
 ;;
 
-let promote ~self job =
-  (* See [create] *)
-  let self = Obj.magic_uncontended (DLS.get self) in
-  Work_deqs.Self.push self job
-;;
-
 let parallel t ~f =
   if is_stopped t then failwith "The scheduler is already stopped";
   match t with
   | Single_domain { sequential; _ } -> Sequential.parallel sequential ~f
-  | Multi_domain { queues; self; _ } ->
-    let promote job = promote ~self job in
+  | Multi_domain { queues; _ } ->
+    let promote job = Work_deqs.push queues job in
     let wake ~n = Work_deqs.try_wake queues ~n in
     let result = Mvar.create () in
     let root =
@@ -114,11 +92,9 @@ let parallel t ~f =
         Mvar.put_exn result { many = Result.globalize res };
         Work_deqs.wake queues ~idx:0)
     in
-    (* See [create] *)
-    let self = Obj.magic_uncontended (DLS.get self) in
-    Work_deqs.Self.push self root;
+    Work_deqs.push queues root;
     Scheduler.with_heartbeat (fun () ->
-      Work_deqs.work queues ~self ~idx:0 ~break:(fun () -> Mvar.is_full result) [@nontail]);
+      Work_deqs.work queues ~break:(fun () -> Mvar.is_full result) [@nontail]);
     Await_blocking.with_await Terminator.never ~f:(fun await ->
       Result.unwrap_ok_exn (Mvar.take await result).many)
     [@nontail]
@@ -128,33 +104,34 @@ module Spawn = struct
   type t =
     { create : Await.t @ local -> Parallel_kernel.t Concurrent.t @ local portable
       @@ global
-    ; spawn : 'a. ('a, Parallel_kernel.t) Concurrent.spawn_fn @@ global
+    ; spawn : 'r 'a. ('r, 'a, Parallel_kernel.t) Concurrent.spawn_fn @@ global
     }
 
   let thread ~threads =
-    let spawn_thread f ~threads =
+    let spawn_thread r f ~threads =
       Atomic.incr threads;
       match
         (* [create] is [nonportable], so we are on domain 0. *)
         Multicore.spawn_on
           ~domain:0
-          (fun () ->
+          (fun r ->
             let scheduler = Sequential.create () in
-            Sequential.parallel scheduler ~f;
+            Sequential.parallel scheduler ~f:(fun c -> f c r);
             Atomic.decr threads)
-          ()
+          r
       with
-      | Spawned -> ()
-      | Failed ((), exn, bt) ->
+      | Spawned -> Concurrent.Spawned
+      | Failed (r, exn, bt) ->
         Atomic.decr threads;
-        Exn.raise_with_original_backtrace exn bt
+        Failed (r, exn, bt)
     in
-    let rec spawn : type a. (a, Parallel_kernel.t) Concurrent.spawn_fn =
-      fun scope ~f ->
+    let rec spawn : type r a. (r, a, Parallel_kernel.t) Concurrent.spawn_fn =
+      fun scope ~f r ->
       let token = Scope.add scope in
-      spawn_thread ~threads (fun parallel ->
+      spawn_thread ~threads r (fun parallel r ->
         Scope.Token.use token ~f:(fun [@inline] terminator scope ->
-          with_concurrent terminator ~f:(fun [@inline] c -> f scope parallel c) [@nontail])
+          with_concurrent terminator ~f:(fun [@inline] c -> f scope parallel c r)
+          [@nontail])
         [@nontail])
     and create await = exclave_
       (Concurrent.create [@mode portable])
@@ -167,22 +144,21 @@ module Spawn = struct
     exclave_ { create; spawn }
   ;;
 
-  let fiber ~self ~queues =
-    let spawn_fiber f ~self ~queues =
-      let promote job = promote ~self job in
+  let fiber ~queues =
+    let spawn_fiber f ~queues =
+      let promote job = Work_deqs.push queues job in
       let wake ~n = Work_deqs.try_wake queues ~n in
       let root = Scheduler.root f ~promote ~wake in
-      (* See [create] *)
-      let self = Obj.magic_uncontended (DLS.get self) in
-      Work_deqs.Self.push self root;
-      Work_deqs.wake_one queues
+      Work_deqs.push queues root;
+      Work_deqs.wake_one queues;
+      Concurrent.Spawned
     in
-    let rec spawn : type a. (a, Parallel_kernel.t) Concurrent.spawn_fn =
-      fun scope ~f ->
+    let rec spawn : type r a. (r, a, Parallel_kernel.t) Concurrent.spawn_fn =
+      fun scope ~f r ->
       let token = Scope.add scope in
-      spawn_fiber ~self ~queues (fun parallel ->
+      spawn_fiber ~queues (fun parallel ->
         Scope.Token.use token ~f:(fun [@inline] terminator scope ->
-          with_concurrent parallel terminator ~f:(fun [@inline] c -> f scope parallel c)
+          with_concurrent parallel terminator ~f:(fun [@inline] c -> f scope parallel c r)
           [@nontail])
         [@nontail])
     and create await = exclave_
@@ -206,8 +182,8 @@ let concurrent t ~terminator ~f =
     let%tydi { create; _ } = Spawn.thread ~threads in
     parallel t ~f:(fun _ ->
       Await_blocking.with_await terminator ~f:(fun await -> f (create await) [@nontail]))
-  | Multi_domain { queues; self; _ } ->
-    let%tydi { create; _ } = Spawn.fiber ~queues ~self in
+  | Multi_domain { queues; _ } ->
+    let%tydi { create; _ } = Spawn.fiber ~queues in
     parallel t ~f:(fun parallel ->
       Await.with_ parallel ~terminator ~yield:Null ~await:Scheduler.await ~f:(fun await ->
         f (create await) [@nontail]))
@@ -218,16 +194,19 @@ module Expert = struct
     match t with
     | Single_domain { threads; _ } ->
       let%tydi { spawn; _ } = Spawn.thread ~threads in
-      Concurrent.Scheduler.create ~spawn:(fun scope ~f ->
+      Concurrent.Scheduler.create ~spawn:(fun scope ~f r ->
         if is_stopped t then failwith "The scheduler is already stopped";
-        spawn scope ~f)
-    | Multi_domain { queues; self; _ } ->
+        spawn scope ~f r)
+    | Multi_domain { queues; _ } ->
       (* Each task must request heartbeats since they do not have an outer scope. *)
-      let%tydi { spawn; _ } = Spawn.fiber ~self ~queues in
-      Concurrent.Scheduler.create ~spawn:(fun scope ~f ->
+      let%tydi { spawn; _ } = Spawn.fiber ~queues in
+      Concurrent.Scheduler.create ~spawn:(fun scope ~f r ->
         if is_stopped t then failwith "The scheduler is already stopped";
-        spawn scope ~f:(fun scope ctx concurrent ->
-          Scheduler.with_heartbeat (fun () -> f scope ctx concurrent [@nontail])
-          [@nontail]))
+        spawn
+          scope
+          ~f:(fun scope ctx concurrent r ->
+            Scheduler.with_heartbeat (fun () -> f scope ctx concurrent r [@nontail])
+            [@nontail])
+          r)
   ;;
 end

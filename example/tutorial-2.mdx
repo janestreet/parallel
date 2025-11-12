@@ -247,11 +247,11 @@ Since each task can only access a separate portion of the array&mdash;and the
 slices are `local`, so don't escape&mdash;this is safe.
 
 To run our parallel quicksort, we need to get an implementation of parallelism
-from a scheduler.  For example, using `Parallel_scheduler_work_stealing`:
+from a scheduler.  For example, using `Parallel_scheduler`:
 
 ```ocaml
 let quicksort ~scheduler ~mutex array =
-  Parallel_scheduler_work_stealing.parallel scheduler ~f:(fun parallel ->
+  Parallel_scheduler.parallel scheduler ~f:(fun parallel ->
     let array = Par_array.of_array array in
     quicksort parallel (Slice.slice array) [@nontail])
 ```
@@ -267,7 +267,7 @@ assures that our caller is not mutating it in parallel.
 <!-- $MDX file=sort.ml,part=quicksort-parallel -->
 ```ocaml
   let quicksort ~scheduler ~mutex array =
-    Parallel_scheduler_work_stealing.parallel scheduler ~f:(fun parallel ->
+    Parallel_scheduler.parallel scheduler ~f:(fun parallel ->
       Await_blocking.with_await Await.Terminator.never ~f:(fun await ->
         Capsule.Mutex.with_lock await mutex ~f:(fun access ->
           let array = Par_array.of_array (Capsule.Data.unwrap ~access array) in
@@ -355,11 +355,11 @@ page](./capsules.mdx).
 <!-- $MDX file=filter/filter.ml,part=filter-mutex -->
 ```ocaml
 let filter ~scheduler ~mutex image =
-  Parallel_scheduler_work_stealing.parallel scheduler ~f:(fun parallel ->
-    let width = Image.width (Capsule.Data.get_id_contended image) in
-    let height = Image.height (Capsule.Data.get_id_contended image) in
+  Parallel_scheduler.parallel scheduler ~f:(fun parallel ->
+    let width = Image.width (Capsule.Data.get_id image) in
+    let height = Image.height (Capsule.Data.get_id image) in
     let data =
-      Parallel_array.init parallel (width * height) ~f:(fun i ->
+      Parallel_array.init parallel (width * height) ~f:(fun _ i ->
         let x = i % width in
         let y = i / width in
         Await_blocking.with_await Await.Terminator.never ~f:(fun await ->
@@ -413,11 +413,11 @@ input, but that's perfectly fine here.
 <!-- $MDX file=filter/filter.ml,part=filter-key -->
 ```ocaml
 let filter ~scheduler ~key image =
-  Parallel_scheduler_work_stealing.parallel scheduler ~f:(fun parallel ->
-    let width = Image.width (Capsule.Data.get_id_contended image) in
-    let height = Image.height (Capsule.Data.get_id_contended image) in
+  Parallel_scheduler.parallel scheduler ~f:(fun parallel ->
+    let width = Image.width (Capsule.Data.get_id image) in
+    let height = Image.height (Capsule.Data.get_id image) in
     let data =
-      Parallel_array.init parallel (width * height) ~f:(fun i ->
+      Parallel_array.init parallel (width * height) ~f:(fun _ i ->
         let x = i % width in
         let y = i / width in
         (Capsule.Expert.Key.access_shared key ~f:(fun access ->

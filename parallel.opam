@@ -11,13 +11,15 @@ build: [
 ]
 depends: [
   "ocaml" {>= "5.2.0"}
+  "async_kernel"
   "await"
   "base"
   "base_bigstring"
+  "bignum"
   "concurrent"
   "core"
   "expect_test_helpers_core"
-  "int_repr"
+  "ocaml_simd"
   "oxcaml_effect"
   "portable"
   "portable_ws_deque"

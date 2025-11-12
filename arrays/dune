@@ -1,7 +1,7 @@
 (library
  (name parallel_arrays)
  (public_name parallel.arrays)
- (libraries base_bigstring unboxed.float32 int_repr pair_or_null
-   parallel_kernel vec)
+ (libraries base_bigstring unboxed.float32 ocaml_simd.avx pair_or_null
+   parallel_kernel stdlib_stable vec)
  (preprocess
   (pps ppx_jane)))

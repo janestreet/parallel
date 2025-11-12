@@ -7,7 +7,7 @@ module type S = sig @@ portable
       a strict data structure. Parallel sequences are distinguished from normal sequences
       by supporting the [split] operation, which divides a sequence into two parts that
       may be collected in parallel. *)
-  type ('a : value mod portable unyielding) t : value mod contended portable unyielding
+  type ('a : value mod portable) t : value mod contended portable
 
   (** The empty sequence. *)
   val empty : 'a t
@@ -27,20 +27,12 @@ module type S = sig @@ portable
     -> int
     -> int t @ local
 
-  (** [init n ~f] is a sequence containing [f i] for each i in [0..n-1]. *)
-  val init : int -> f:(int -> 'a) @ portable unyielding -> 'a t @ local
-
-  (** See [init]. Allows nested parallelism. *)
-  val init'
-    :  int
-    -> f:(Parallel_kernel.t @ local -> int -> 'a) @ portable unyielding
-    -> 'a t @ local
+  (** [init n ~f] is a sequence containing [f _ i] for each i in [0..n-1]. *)
+  val init : int -> f:(Parallel_kernel.t @ local -> int -> 'a) @ portable -> 'a t @ local
 
   (** [of_iarray i] is a sequence containing the contents of the iarray [i]. This sequence
       has a known length and may be split in constant time. *)
-  val of_iarray
-    : ('a : value mod contended portable unyielding).
-    'a iarray -> 'a t @ local
+  val of_iarray : ('a : value mod contended portable). 'a iarray -> 'a t @ local
 
   (** [append s0 s1] returns a sequence containing the elements of [s0] and then the
       elements of [s1]. *)
@@ -49,23 +41,20 @@ module type S = sig @@ portable
   (** [product_left seq0 seq1] joins an ['a] sequence and a ['b] sequence into an
       [('a * 'b)] sequence by pairing each element of [seq0] with a copy of [seq1]. *)
   val product_left
-    : ('a : value mod contended portable unyielding).
+    : ('a : value mod contended portable).
     'a t @ local -> 'b t @ local -> ('a * 'b) t @ local
 
   (** [product_right seq0 seq1] joins an ['a] sequence and a ['b] sequence into an
       [('a * 'b)] sequence by pairing each element of [seq1] with a copy of [seq0]. *)
   val product_right
-    : ('b : value mod contended portable unyielding).
+    : ('b : value mod contended portable).
     'a t @ local -> 'b t @ local -> ('a * 'b) t @ local
 
   (** [map seq ~f] converts an ['a] sequence to a ['b] sequence by applying [f] to each
       element of [seq]. *)
-  val map : 'a t @ local -> f:('a -> 'b) @ portable unyielding -> 'b t @ local
-
-  (** See [map]. Allows nested parallelism. *)
-  val map'
+  val map
     :  'a t @ local
-    -> f:(Parallel_kernel.t @ local -> 'a -> 'b) @ portable unyielding
+    -> f:(Parallel_kernel.t @ local -> 'a -> 'b) @ portable
     -> 'b t @ local
 
   (** [iter parallel seq ~f] applies [f] to each element of [seq] in parallel. The order
@@ -73,14 +62,7 @@ module type S = sig @@ portable
   val iter
     :  Parallel_kernel.t @ local
     -> 'a t @ local
-    -> f:('a -> unit) @ portable unyielding
-    -> unit
-
-  (** See [iter]. Allows nested parallelism. *)
-  val iter'
-    :  Parallel_kernel.t @ local
-    -> 'a t @ local
-    -> f:(Parallel_kernel.t @ local -> 'a -> unit) @ portable unyielding
+    -> f:(Parallel_kernel.t @ local -> 'a -> unit) @ portable
     -> unit
 
   (** [fold parallel seq ~f ~init ~combine] folds [combine] over [map seq ~f] in parallel.
@@ -88,22 +70,12 @@ module type S = sig @@ portable
       and [init ()] must be a neutral element. The order in which [f] and [combine] are
       applied is unspecified and potentially non-deterministic. *)
   val fold
-    : ('acc : value mod portable unyielding).
+    : ('acc : value mod portable).
     Parallel_kernel.t @ local
     -> 'a t @ local
-    -> init:(unit -> 'acc) @ portable unyielding
-    -> f:('acc -> 'a -> 'acc) @ portable unyielding
-    -> combine:('acc -> 'acc -> 'acc) @ portable unyielding
-    -> 'acc
-
-  (** See [fold]. Allows nested parallelism. *)
-  val fold'
-    : ('acc : value mod portable unyielding).
-    Parallel_kernel.t @ local
-    -> 'a t @ local
-    -> init:(unit -> 'acc) @ portable unyielding
-    -> f:(Parallel_kernel.t @ local -> 'acc -> 'a -> 'acc) @ portable unyielding
-    -> combine:(Parallel_kernel.t @ local -> 'acc -> 'acc -> 'acc) @ portable unyielding
+    -> init:(unit -> 'acc) @ portable
+    -> f:(Parallel_kernel.t @ local -> 'acc -> 'a -> 'acc) @ portable
+    -> combine:(Parallel_kernel.t @ local -> 'acc -> 'acc -> 'acc) @ portable
     -> 'acc
 
   (** [reduce parallel seq ~f] reduces [seq] using [f] in parallel. [f] must be
@@ -112,14 +84,7 @@ module type S = sig @@ portable
   val reduce
     :  Parallel_kernel.t @ local
     -> 'a t @ local
-    -> f:('a -> 'a -> 'a) @ portable unyielding
-    -> 'a option
-
-  (** See [reduce]. Allows nested parallelism. *)
-  val reduce'
-    :  Parallel_kernel.t @ local
-    -> 'a t @ local
-    -> f:(Parallel_kernel.t @ local -> 'a -> 'a -> 'a) @ portable unyielding
+    -> f:(Parallel_kernel.t @ local -> 'a -> 'a -> 'a) @ portable
     -> 'a option
 
   (** [find parallel seq ~f] returns the first element of [seq] for which [f] returns
@@ -128,14 +93,7 @@ module type S = sig @@ portable
   val find
     :  Parallel_kernel.t @ local
     -> 'a t @ local
-    -> f:('a -> bool) @ portable unyielding
-    -> 'a option
-
-  (** See [find]. Allows nested parallelism. *)
-  val find'
-    :  Parallel_kernel.t @ local
-    -> 'a t @ local
-    -> f:(Parallel_kernel.t @ local -> 'a -> bool) @ portable unyielding
+    -> f:(Parallel_kernel.t @ local -> 'a -> bool) @ portable
     -> 'a option
 
   (** [to_list seq] collects a sequence into a list by evaluating each element in
@@ -163,12 +121,10 @@ module type Parallel_sequence = sig @@ portable
       the unfoldings of [s0] and [s1] produces the same elements as the original sequence.
       [split] must return [Some] whenever the sequence contains more than one element. *)
   val unfold
-    : ('s : value mod contended portable unyielding).
+    : ('s : value mod contended portable).
     init:'s
-    -> next:(Parallel_kernel.t @ local -> 's -> ('a, 's) Pair_or_null.t)
-       @ portable unyielding
-    -> split:(Parallel_kernel.t @ local -> 's -> ('s, 's) Pair_or_null.t)
-       @ portable unyielding
+    -> next:(Parallel_kernel.t @ local -> 's -> ('a, 's) Pair_or_null.t) @ portable
+    -> split:(Parallel_kernel.t @ local -> 's -> ('s, 's) Pair_or_null.t) @ portable
     -> 'a t @ local
 
   (** [concat seqs] creates a sequence representing the concatenation of all sequences in
@@ -178,25 +134,16 @@ module type Parallel_sequence = sig @@ portable
   val concat : 'a t t @ local -> 'a t @ local
 
   (** [concat_map seq ~f] is equivalent to [map seq ~f |> concat]. *)
-  val concat_map : 'a t @ local -> f:('a -> 'b t) @ portable unyielding -> 'b t @ local
-
-  (** See [concat_map]. Allows nested parallelism. *)
-  val concat_map'
+  val concat_map
     :  'a t @ local
-    -> f:(Parallel_kernel.t @ local -> 'a -> 'b t) @ portable unyielding
+    -> f:(Parallel_kernel.t @ local -> 'a -> 'b t) @ portable
     -> 'b t @ local
 
   (** [filter_map seq ~f] converts an ['a] sequence to a ['b] sequence containing only the
       elements of [seq] such that [f] returns [Some b]. *)
   val filter_map
     :  'a t @ local
-    -> f:('a -> 'b option) @ portable unyielding
-    -> 'b t @ local
-
-  (** See [filter_map]. Allows nested parallelism. *)
-  val filter_map'
-    :  'a t @ local
-    -> f:(Parallel_kernel.t @ local -> 'a -> 'b option) @ portable unyielding
+    -> f:(Parallel_kernel.t @ local -> 'a -> 'b option) @ portable
     -> 'b t @ local
 
   (** Sequences of type ['a With_length.t] are guaranteed to have a known length. When the
@@ -222,13 +169,12 @@ module type Parallel_sequence = sig @@ portable
         the same elements as the original sequence. [split_at] must return [Some] whenever
         [n > 0 && n < length state] *)
     val unfold
-      : ('s : value mod contended portable unyielding).
+      : ('s : value mod contended portable).
       init:'s
-      -> next:(Parallel_kernel.t @ local -> 's -> ('a, 's) Pair_or_null.t)
-         @ portable unyielding
+      -> next:(Parallel_kernel.t @ local -> 's -> ('a, 's) Pair_or_null.t) @ portable
       -> split_at:(Parallel_kernel.t @ local -> 's -> n:int -> ('s, 's) Pair_or_null.t)
-         @ portable unyielding
-      -> length:('s -> int) @ portable unyielding
+         @ portable
+      -> length:('s -> int) @ portable
       -> 'a t @ local
 
     (** [zip_exn seq0 seq1] joins an ['a] sequence and a ['b] sequence into a [('a * 'b)]
@@ -238,12 +184,9 @@ module type Parallel_sequence = sig @@ portable
 
     (** [mapi seq ~f] converts an ['a] sequence to a ['b] sequence by applying [f] to each
         element of [seq] and its index. *)
-    val mapi : 'a t @ local -> f:(int -> 'a -> 'b) @ portable unyielding -> 'b t @ local
-
-    (** See [mapi]. Allows nested parallelism. *)
-    val mapi'
+    val mapi
       :  'a t @ local
-      -> f:(Parallel_kernel.t @ local -> int -> 'a -> 'b) @ portable unyielding
+      -> f:(Parallel_kernel.t @ local -> int -> 'a -> 'b) @ portable
       -> 'b t @ local
 
     (** [iteri parallel seq ~f] applies [f] to each element of [seq] and its index, in
@@ -252,14 +195,7 @@ module type Parallel_sequence = sig @@ portable
     val iteri
       :  Parallel_kernel.t @ local
       -> 'a t @ local
-      -> f:(int -> 'a -> unit) @ portable unyielding
-      -> unit
-
-    (** See [iteri]. Allows nested parallelism. *)
-    val iteri'
-      :  Parallel_kernel.t @ local
-      -> 'a t @ local
-      -> f:(Parallel_kernel.t @ local -> int -> 'a -> unit) @ portable unyielding
+      -> f:(Parallel_kernel.t @ local -> int -> 'a -> unit) @ portable
       -> unit
 
     (** [foldi parallel seq ~f ~init ~combine] folds [combine] over [mapi seq ~f] in
@@ -267,22 +203,12 @@ module type Parallel_sequence = sig @@ portable
         associative and [init] must be a neutral element. The order in which [f] and
         [combine] are applied is unspecified and potentially non-deterministic. *)
     val foldi
-      : ('acc : value mod portable unyielding).
+      : ('acc : value mod portable).
       Parallel_kernel.t @ local
       -> 'a t @ local
-      -> init:(unit -> 'acc) @ portable unyielding
-      -> f:(int -> 'acc -> 'a -> 'acc) @ portable unyielding
-      -> combine:('acc -> 'acc -> 'acc) @ portable unyielding
-      -> 'acc
-
-    (** See [foldi]. Allows nested parallelism. *)
-    val foldi'
-      : ('acc : value mod portable unyielding).
-      Parallel_kernel.t @ local
-      -> 'a t @ local
-      -> init:(unit -> 'acc) @ portable unyielding
-      -> f:(Parallel_kernel.t @ local -> int -> 'acc -> 'a -> 'acc) @ portable unyielding
-      -> combine:(Parallel_kernel.t @ local -> 'acc -> 'acc -> 'acc) @ portable unyielding
+      -> init:(unit -> 'acc) @ portable
+      -> f:(Parallel_kernel.t @ local -> int -> 'acc -> 'a -> 'acc) @ portable
+      -> combine:(Parallel_kernel.t @ local -> 'acc -> 'acc -> 'acc) @ portable
       -> 'acc
 
     (** [findi parallel seq ~f] returns the first element of [seq], along with its index
@@ -292,14 +218,7 @@ module type Parallel_sequence = sig @@ portable
     val findi
       :  Parallel_kernel.t @ local
       -> 'a t @ local
-      -> f:(int -> 'a -> bool) @ portable unyielding
-      -> (int * 'a) option
-
-    (** See [findi]. Allows nested parallelism. *)
-    val findi'
-      :  Parallel_kernel.t @ local
-      -> 'a t @ local
-      -> f:(Parallel_kernel.t @ local -> int -> 'a -> bool) @ portable unyielding
+      -> f:(Parallel_kernel.t @ local -> int -> 'a -> bool) @ portable
       -> (int * 'a) option
   end
 

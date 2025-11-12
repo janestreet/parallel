@@ -1,6 +1,7 @@
 open Base
-module Atomic = Portable.Atomic
 open Await
+module Atomic = Portable.Atomic
+module Scheduler = Parallel_kernel.For_scheduler
 
 module Once_deq : sig @@ portable
   type t : value mod portable
@@ -12,21 +13,28 @@ module Once_deq : sig @@ portable
 end = struct
   type t = (unit -> unit) Portable_ws_deque.t
 
-  (* Safety: elements are pushed into the deque exactly once, and either popped or
-     stolen exactly once. *)
+  (* [push] and [pop] are mutually non-reentrant, but the heartbeat may call [push]
+     concurrently, so it must be disabled. *)
+
   let[@inline] push t f =
-    Portable_ws_deque.push t ((Obj.magic_many [@mode uncontended portable aliased]) f)
+    Scheduler.without_heartbeat (fun () ->
+      (* Safety: elements are pushed into the deque exactly once, and either popped or
+         stolen exactly once. *)
+      Portable_ws_deque.push t ((Obj.magic_many [@mode uncontended portable aliased]) f))
+    [@nontail]
   ;;
 
-  let pop = Portable_ws_deque.pop
+  let[@inline] pop t =
+    (Scheduler.without_heartbeat (fun () -> { portended = Portable_ws_deque.pop t }))
+      .portended
+  ;;
+
   let steal = Portable_ws_deque.steal
   let create = Portable_ws_deque.create
 end
 
-module Self = Once_deq
-
 type 'k queue_inner =
-  { stealer : Once_deq.t @@ contended
+  { queue : Once_deq.t @@ contended
   ; sleepy : bool Awaitable.t
   ; mutex : 'k Mutex.t
   }
@@ -39,20 +47,19 @@ type t =
   }
 
 let create_one () =
-  let queue = Capsule.Isolated.create Once_deq.create in
-  let queue, { aliased = stealer } = Capsule.Isolated.get_id_contended queue in
+  let queue = Once_deq.create () in
   let sleepy = Awaitable.make_alone false in
   (* NOTE: We're not actually protecting any data in this mutex's capsule; we're just
      using it to synchronize [stealer] and [sleepy], which are both atomic. *)
   let (P key) = Capsule.Expert.create () in
   let mutex = Mutex.create key in
-  Unique.Once.Atomic.make { many = queue }, P { stealer; sleepy; mutex }
+  P { queue; sleepy; mutex }
 ;;
 
 let create ~domains =
-  let owners, queues = Iarray.init domains ~f:(fun _ -> create_one ()) |> Iarray.unzip in
+  let queues = Iarray.init domains ~f:(fun _ -> create_one ()) in
   let sleepers = Atomic.make_alone 0 in
-  owners, { queues; sleepers }
+  { queues; sleepers }
 ;;
 
 let length t = Iarray.length t.queues
@@ -137,12 +144,14 @@ let steal queues ~idx =
     if i < n
     then (
       let j = start + i in
+      (* start < len, i < len -> j < 2 * len *)
       let j = Bool.select (j >= n) (j - n) j in
       if j = idx
       then aux (i + 1)
       else (
-        let (P { stealer; _ }) = Iarray.unsafe_get queues j in
-        match Once_deq.steal stealer with
+        (* Safety: 0 <= j < len = Iarray.length queues *)
+        let (P { queue; _ }) = Iarray.unsafe_get queues j in
+        match Once_deq.steal queue with
         | This _ as task -> task
         | Null -> aux (i + 1)))
     else Null
@@ -150,11 +159,20 @@ let steal queues ~idx =
   aux 0 [@nontail]
 ;;
 
-let work { queues; sleepers } ~self ~idx ~break =
+let push { queues; _ } f =
+  let idx = Multicore.current_domain () in
+  (* Safety: called from domain with id less than [Iarray.length queues]. *)
+  let (P { queue = self; _ }) = Iarray.unsafe_get queues idx in
+  (* Safety: exactly one thread accesses [self] at [uncontended]. *)
+  Once_deq.push (Obj.magic_uncontended self) f
+;;
+
+let work { queues; sleepers } ~break =
+  let idx = Multicore.current_domain () in
+  let (P { queue = self; sleepy; mutex }) = Iarray.get queues idx in
   (* We use spinning for operations on the queue mutex, since we only want to get
      descheduled if we know there's no work to do. *)
   Await_spinning.with_await Terminator.never ~f:(fun spin ->
-    let (P { sleepy; mutex; _ }) = Iarray.get queues idx in
     let[@inline] rec steal_or_break key =
       match steal queues ~idx with
       | This _ as task -> #(task, key)
@@ -183,7 +201,8 @@ let work { queues; sleepers } ~self ~idx ~break =
         steal_or_break key
     in
     let rec go () =
-      match Once_deq.pop self with
+      (* Safety: exactly one thread accesses [self] at [uncontended]. *)
+      match Once_deq.pop (Obj.magic_uncontended self) with
       | This task ->
         task ();
         go ()

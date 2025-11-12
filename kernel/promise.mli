@@ -15,16 +15,17 @@ val start : unit -> 'a t
     Applying [f] returns after one of three conditions are met.
 
     - If [t] has already been awaited, [f] returns immediately. Otherwise, [f] applies
-      [job] with a fresh [Parallel.t] created from [scheduler].
+      [job] with a fresh [Parallel.t] using [scheduler] and [tokens].
 
-    - If applying [job] suspends the current fiber, [f] returns immediately. When the
-      awaited fiber completes, it will resume [f].
+    - If applying [job] suspends the current fiber, [f] returns immediately. This occurs
+      if [job] awaits another promise or an [Await.Trigger.t]. When the promise is filled
+      or the trigger is signaled, [f] is resubmitted to [scheduler].
 
-    - If [job] returns a result and another fiber is awaiting [t], [f] resumes the awaiter
-      with the result. Otherwise, [f] stores the result in [t] and returns. *)
+    - If [job] returns a result and another fiber is awaiting [t], [f] resubmits the
+      awaiter to [scheduler]. Otherwise, [f] stores the result in [t]. *)
 val fiber
   :  'a t
-  -> 'a Parallel_kernel1.Job.t @ once portable
+  -> 'a Parallel_kernel1.Job.t @ forkable once portable unyielding
   -> scheduler:Parallel_kernel0.Scheduler.t
   -> tokens:int
   -> (unit -> unit) @ once portable
@@ -45,6 +46,6 @@ val fiber
     [job] by a previous call to [fiber t job]. *)
 val await_or_run
   :  'a t
-  -> 'a Parallel_kernel1.Job.t @ once portable
+  -> 'a Parallel_kernel1.Job.t @ forkable once portable unyielding
   -> Parallel_kernel1.t @ local
   -> 'a Result.Capsule.t @ local unique

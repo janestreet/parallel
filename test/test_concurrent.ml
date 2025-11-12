@@ -18,7 +18,7 @@ let rec fib_par parallel n =
 
 module Test_scheduler (Scheduler : Parallel.Scheduler.S_concurrent) = struct
   let with_scheduler ?max_domains f =
-    let scheduler = (Scheduler.create [@alert "-experimental"]) ?max_domains () in
+    let scheduler = Scheduler.create ?max_domains () in
     f scheduler;
     Scheduler.stop scheduler
   ;;
@@ -37,10 +37,8 @@ module Test_scheduler (Scheduler : Parallel.Scheduler.S_concurrent) = struct
 
   let%expect_test "basic concurrent-parallel" =
     let x, y = Atomic.make 0, Atomic.make 0 in
-    let scheduler =
-      (Parallel_scheduler_work_stealing.create [@alert "-experimental"]) ()
-    in
-    Parallel_scheduler_work_stealing.concurrent
+    let scheduler = Parallel_scheduler.create () in
+    Parallel_scheduler.concurrent
       scheduler
       ~terminator:Terminator.never
       ~f:(fun concurrent ->
@@ -49,7 +47,7 @@ module Test_scheduler (Scheduler : Parallel.Scheduler.S_concurrent) = struct
             Atomic.set x (fib_par parallel 10));
           Concurrent.spawn spawn ~f:(fun _scope parallel _concurrent ->
             Atomic.set y (fib_par parallel 10))));
-    Parallel_scheduler_work_stealing.stop scheduler;
+    Parallel_scheduler.stop scheduler;
     printf "%d %d\n" (Atomic.get x) (Atomic.get y);
     [%expect {| 89 89 |}]
   ;;
@@ -150,4 +148,4 @@ module Test_scheduler (Scheduler : Parallel.Scheduler.S_concurrent) = struct
   ;;
 end
 
-module _ = Test_scheduler (Parallel_scheduler_work_stealing)
+module _ = Test_scheduler (Parallel_scheduler)

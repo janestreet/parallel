@@ -41,60 +41,23 @@ end =
 and Runqueue : sig @@ portable
   type _ node : value mod portable =
     | Cons1 :
-        { mutable p0 : 'a Promise.t or_null
-        ; job0 : 'a Job.t @@ global portable
+        { mutable promise : 'a Promise.t or_null
+        ; job : 'a Job.t @@ global portable
         ; mutable down : nodes
         }
         -> ('a * unit) node
-    | Cons2 :
-        { mutable p0 : 'a Promise.t or_null
-        ; mutable p1 : 'b Promise.t or_null
-        ; job0 : 'a Job.t @@ global portable
-        ; job1 : 'b Job.t @@ global portable
-        ; mutable down : nodes
-        }
-        -> ('a * ('b * unit)) node
-    | Cons3 :
-        { mutable p0 : 'a Promise.t or_null
-        ; mutable p1 : 'b Promise.t or_null
-        ; mutable p2 : 'c Promise.t or_null
-        ; job0 : 'a Job.t @@ global portable
-        ; job1 : 'b Job.t @@ global portable
-        ; job2 : 'c Job.t @@ global portable
-        ; mutable down : nodes
-        }
-        -> ('a * ('b * ('c * unit))) node
-    | Cons4 :
-        { mutable p0 : 'a Promise.t or_null
-        ; mutable p1 : 'b Promise.t or_null
-        ; mutable p2 : 'c Promise.t or_null
-        ; mutable p3 : 'd Promise.t or_null
-        ; job0 : 'a Job.t @@ global portable
-        ; job1 : 'b Job.t @@ global portable
-        ; job2 : 'c Job.t @@ global portable
-        ; job3 : 'd Job.t @@ global portable
-        ; mutable down : nodes
-        }
-        -> ('a * ('b * ('c * ('d * unit)))) node
     | ConsN :
-        { mutable p0 : 'a Promise.t or_null
-        ; mutable p1 : 'b Promise.t or_null
-        ; mutable p2 : 'c Promise.t or_null
-        ; mutable p3 : 'd Promise.t or_null
-        ; job0 : 'a Job.t @@ global portable
-        ; job1 : 'b Job.t @@ global portable
-        ; job2 : 'c Job.t @@ global portable
-        ; job3 : 'd Job.t @@ global portable
-        ; more : ('e * 'l) node
+        { mutable promise : 'a Promise.t or_null
+        ; job : 'a Job.t @@ global portable
+        ; more : ('b * 'l) node
         }
-        -> ('a * ('b * ('c * ('d * ('e * 'l))))) node
+        -> ('a * ('b * 'l)) node
   [@@unsafe_allow_any_mode_crossing]
 
   and nodes = Q : _ node Stack_pointer.t -> nodes [@@unboxed]
 
   type t =
     { mutable tokens : int
-    ; mutable promoting : bool
     ; mutable head : nodes
     ; mutable cursor : nodes
     ; scheduler : Scheduler.t @@ global many

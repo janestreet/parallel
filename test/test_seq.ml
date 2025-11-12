@@ -2,12 +2,6 @@ open! Core
 open! Import
 open Parallel
 
-let[@tail_mod_cons] rec ( @ ) l1 l2 =
-  match l1 with
-  | [] -> l2
-  | hd :: tl -> hd :: (tl @ l2)
-;;
-
 let rec fib n =
   match n with
   | 0 | 1 -> 1
@@ -31,7 +25,7 @@ let collect parallel seq =
 ;;
 
 module Test_scheduler (Scheduler : Parallel.Scheduler.S) = struct
-  let scheduler = (Scheduler.create [@alert "-experimental"]) ()
+  let scheduler = Scheduler.create ()
 
   module Test_intf (Seq : sig
       include Sequence.S
@@ -75,9 +69,9 @@ module Test_scheduler (Scheduler : Parallel.Scheduler.S) = struct
 
     let%expect_test "init" =
       Scheduler.parallel scheduler ~f:(fun parallel ->
-        let ints = Seq.init 10 ~f:(fun i -> i * i) in
+        let ints = Seq.init 10 ~f:(fun _ i -> i * i) in
         collect parallel ints;
-        let ints = Seq.init 10 ~f:(fun i -> i % 2) in
+        let ints = Seq.init 10 ~f:(fun _ i -> i % 2) in
         collect parallel ints [@nontail]);
       [%expect
         {|
@@ -104,9 +98,9 @@ module Test_scheduler (Scheduler : Parallel.Scheduler.S) = struct
 
     let%expect_test "map" =
       Scheduler.parallel scheduler ~f:(fun parallel ->
-        let ints = Seq.range 0 10 |> Seq.map ~f:(fun i -> i * i) in
+        let ints = Seq.range 0 10 |> Seq.map ~f:(fun _ i -> i * i) in
         collect parallel ints;
-        let ints = Seq.range 0 10 |> Seq.map ~f:fib in
+        let ints = Seq.range 0 10 |> Seq.map ~f:(fun _ i -> fib i) in
         collect parallel ints [@nontail]);
       [%expect
         {|
@@ -122,7 +116,7 @@ module Test_scheduler (Scheduler : Parallel.Scheduler.S) = struct
       Scheduler.parallel scheduler ~f:(fun parallel ->
         let ints = Seq.range 0 10 in
         (* Order is non-deterministic *)
-        Seq.iter parallel ints ~f:(fun _ -> printf ".") [@nontail]);
+        Seq.iter parallel ints ~f:(fun _ _ -> printf ".") [@nontail]);
       [%expect {| .......... |}]
     ;;
 
@@ -148,15 +142,15 @@ module Test_scheduler (Scheduler : Parallel.Scheduler.S) = struct
           parallel
           ints
           ~init:(fun () -> "")
-          ~f:(fun acc i -> acc ^ Int.to_string i)
-          ~combine:(fun l r -> l ^ r)
+          ~f:(fun _ acc i -> acc ^ Int.to_string i)
+          ~combine:(fun _ l r -> l ^ r)
         |> print_endline;
         Seq.fold
           parallel
           ints
           ~init:(fun () -> Empty)
-          ~f:(fun acc i -> Node (acc, Leaf i))
-          ~combine:(fun l r -> Node (l, r))
+          ~f:(fun _ acc i -> Node (acc, Leaf i))
+          ~combine:(fun _ l r -> Node (l, r))
         |> print_tree);
       [%expect
         {|
@@ -168,10 +162,10 @@ module Test_scheduler (Scheduler : Parallel.Scheduler.S) = struct
     let%expect_test "reduce" =
       Scheduler.parallel scheduler ~f:(fun parallel ->
         let ints = Seq.range 0 10 in
-        (match Seq.reduce parallel ints ~f:(fun acc i -> acc + i) with
+        (match Seq.reduce parallel ints ~f:(fun _ acc i -> acc + i) with
          | Some i -> printf "%d\n" i
          | None -> assert false);
-        match Seq.reduce parallel ints ~f:(fun acc i -> Int.max acc i) with
+        match Seq.reduce parallel ints ~f:(fun _ acc i -> Int.max acc i) with
         | Some i -> printf "%d\n" i
         | None -> assert false);
       [%expect
@@ -184,10 +178,10 @@ module Test_scheduler (Scheduler : Parallel.Scheduler.S) = struct
     let%expect_test "find" =
       Scheduler.parallel scheduler ~f:(fun parallel ->
         let ints = Seq.range 0 10 in
-        (match Seq.find parallel ints ~f:(fun i -> i = 8) with
+        (match Seq.find parallel ints ~f:(fun _ i -> i = 8) with
          | Some i -> printf "%d\n" i
          | None -> assert false);
-        match Seq.find parallel ints ~f:(fun i -> (i + 1) % 4 = 0) with
+        match Seq.find parallel ints ~f:(fun _ i -> (i + 1) % 4 = 0) with
         | Some i -> printf "%d\n" i
         | None -> assert false);
       [%expect
@@ -201,9 +195,9 @@ module Test_scheduler (Scheduler : Parallel.Scheduler.S) = struct
       Scheduler.parallel scheduler ~f:(fun parallel ->
         let ints0 = Seq.range 0 5 in
         let ints1 = Seq.range ~stride:10 0 50 in
-        let ints = Seq.product_left ints0 ints1 |> Seq.map ~f:(fun (i, j) -> i + j) in
+        let ints = Seq.product_left ints0 ints1 |> Seq.map ~f:(fun _ (i, j) -> i + j) in
         collect parallel ints;
-        let ints = Seq.product_right ints0 ints1 |> Seq.map ~f:(fun (i, j) -> i + j) in
+        let ints = Seq.product_right ints0 ints1 |> Seq.map ~f:(fun _ (i, j) -> i + j) in
         collect parallel ints [@nontail]);
       [%expect
         {|
@@ -241,10 +235,10 @@ module Test_scheduler (Scheduler : Parallel.Scheduler.S) = struct
     ;;
   end
 
-  module Test_without_length = struct
+  module%test Test_without_length = struct
     module Seq = Sequence
 
-    module Test_shared = Test_intf (struct
+    module%test Test_shared = Test_intf (struct
         include Seq
 
         let to_seq s = exclave_ s
@@ -273,7 +267,7 @@ module Test_scheduler (Scheduler : Parallel.Scheduler.S) = struct
     let%expect_test "concat" =
       Scheduler.parallel scheduler ~f:(fun parallel ->
         let ints =
-          Seq.init 8 ~f:(fun i ->
+          Seq.init 8 ~f:(fun _ i ->
             let ints = Seq.range 0 i in
             Sequence.globalize ints [@nontail])
           |> Seq.concat
@@ -290,17 +284,17 @@ module Test_scheduler (Scheduler : Parallel.Scheduler.S) = struct
       Scheduler.parallel scheduler ~f:(fun parallel ->
         let ints =
           Seq.range 0 8
-          |> Seq.concat_map ~f:(fun i ->
+          |> Seq.concat_map ~f:(fun _ i ->
             let ints = Seq.range 0 i in
             Sequence.globalize ints [@nontail])
         in
         collect parallel ints;
         let ints =
           Seq.range 0 6
-          |> Seq.concat_map ~f:(fun i ->
+          |> Seq.concat_map ~f:(fun _ i ->
             let ints = Seq.range 0 i in
             let ints =
-              Seq.concat_map ints ~f:(fun i ->
+              Seq.concat_map ints ~f:(fun _ i ->
                 let ints = Seq.range 0 i in
                 Sequence.globalize ints [@nontail])
             in
@@ -321,7 +315,7 @@ module Test_scheduler (Scheduler : Parallel.Scheduler.S) = struct
       Scheduler.parallel scheduler ~f:(fun parallel ->
         let ints =
           Seq.range 0 20
-          |> Seq.filter_map ~f:(fun i -> if i % 2 = 0 then Some (i / 2) else None)
+          |> Seq.filter_map ~f:(fun _ i -> if i % 2 = 0 then Some (i / 2) else None)
         in
         collect parallel ints [@nontail]);
       [%expect
@@ -332,7 +326,7 @@ module Test_scheduler (Scheduler : Parallel.Scheduler.S) = struct
     ;;
 
     let concated_ints n = exclave_
-      Seq.init n ~f:(fun i ->
+      Seq.init n ~f:(fun _ i ->
         let ints = Seq.range i (i + 1) in
         Sequence.globalize ints [@nontail])
       |> Seq.concat
@@ -341,8 +335,8 @@ module Test_scheduler (Scheduler : Parallel.Scheduler.S) = struct
     let%expect_test "product of concat" =
       Scheduler.parallel scheduler ~f:(fun parallel ->
         let ints0 = concated_ints 5 in
-        let ints1 = ints0 |> Seq.map ~f:(fun i -> i * 10) in
-        let ints = Seq.product_left ints0 ints1 |> Seq.map ~f:(fun (i, j) -> i + j) in
+        let ints1 = ints0 |> Seq.map ~f:(fun _ i -> i * 10) in
+        let ints = Seq.product_left ints0 ints1 |> Seq.map ~f:(fun _ (i, j) -> i + j) in
         collect parallel ints [@nontail]);
       [%expect
         {|
@@ -387,8 +381,8 @@ module Test_scheduler (Scheduler : Parallel.Scheduler.S) = struct
                Scheduler.parallel scheduler ~f:(fun parallel ->
                  let ints = Seq.range 0 i in
                  let ints =
-                   Seq.concat_map ints ~f:(fun _ ->
-                     let ints = Seq.init j ~f:(fun j -> i * j) in
+                   Seq.concat_map ints ~f:(fun _ _ ->
+                     let ints = Seq.init j ~f:(fun _ j -> i * j) in
                      Sequence.globalize ints [@nontail])
                  in
                  let res = Seq.to_iarray parallel ints in
@@ -404,10 +398,10 @@ module Test_scheduler (Scheduler : Parallel.Scheduler.S) = struct
     ;;
   end
 
-  module Test_with_length = struct
+  module%test Test_with_length = struct
     module Seq = Sequence.With_length
 
-    module Test_shared = Test_intf (struct
+    module%test Test_shared = Test_intf (struct
         include Seq
 
         let to_seq s = exclave_ Sequence.of_with_length s
@@ -440,7 +434,7 @@ module Test_scheduler (Scheduler : Parallel.Scheduler.S) = struct
       Scheduler.parallel scheduler ~f:(fun parallel ->
         let ints0 = Seq.range 0 10 in
         let ints1 = Seq.range ~stride:2 2 22 in
-        let ints = Seq.zip_exn ints0 ints1 |> Seq.map ~f:(fun (i, j) -> i + j) in
+        let ints = Seq.zip_exn ints0 ints1 |> Seq.map ~f:(fun _ (i, j) -> i + j) in
         collect parallel (Sequence.of_with_length ints) [@nontail]);
       [%expect
         {|
@@ -467,9 +461,9 @@ module Test_scheduler (Scheduler : Parallel.Scheduler.S) = struct
 
     let%expect_test "mapi" =
       Scheduler.parallel scheduler ~f:(fun parallel ->
-        let ints = Seq.range 0 10 |> Seq.mapi ~f:(fun i j -> i * j) in
+        let ints = Seq.range 0 10 |> Seq.mapi ~f:(fun _ i j -> i * j) in
         collect parallel (Sequence.of_with_length ints);
-        let ints = Seq.range 0 10 |> Seq.mapi ~f:(fun i j -> fib (i + j)) in
+        let ints = Seq.range 0 10 |> Seq.mapi ~f:(fun _ i j -> fib (i + j)) in
         collect parallel (Sequence.of_with_length ints) [@nontail]);
       [%expect
         {|
@@ -485,7 +479,7 @@ module Test_scheduler (Scheduler : Parallel.Scheduler.S) = struct
       Scheduler.parallel scheduler ~f:(fun parallel ->
         let ints = Seq.range 0 10 in
         (* Order is non-deterministic *)
-        Seq.iteri parallel ints ~f:(fun _ _ -> printf ".") [@nontail]);
+        Seq.iteri parallel ints ~f:(fun _ _ _ -> printf ".") [@nontail]);
       [%expect {| .......... |}]
     ;;
 
@@ -496,8 +490,8 @@ module Test_scheduler (Scheduler : Parallel.Scheduler.S) = struct
           parallel
           ints
           ~init:(fun () -> "")
-          ~f:(fun i acc j -> acc ^ " " ^ Int.to_string i ^ ":" ^ Int.to_string j)
-          ~combine:(fun l r -> l ^ r)
+          ~f:(fun _ i acc j -> acc ^ " " ^ Int.to_string i ^ ":" ^ Int.to_string j)
+          ~combine:(fun _ l r -> l ^ r)
         |> print_endline);
       [%expect {| 0:0 1:1 2:2 3:3 4:4 5:5 6:6 7:7 8:8 9:9 |}]
     ;;
@@ -505,10 +499,10 @@ module Test_scheduler (Scheduler : Parallel.Scheduler.S) = struct
     let%expect_test "findi" =
       Scheduler.parallel scheduler ~f:(fun parallel ->
         let ints = Seq.range 0 10 in
-        (match Seq.findi parallel ints ~f:(fun i j -> i = 8 && j = 8) with
+        (match Seq.findi parallel ints ~f:(fun _ i j -> i = 8 && j = 8) with
          | Some (i, j) -> printf "%d:%d\n" i j
          | None -> assert false);
-        match Seq.findi parallel ints ~f:(fun i _ -> (i + 1) % 4 = 0) with
+        match Seq.findi parallel ints ~f:(fun _ i _ -> (i + 1) % 4 = 0) with
         | Some (i, j) -> printf "%d:%d\n" i j
         | None -> assert false);
       [%expect

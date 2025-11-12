@@ -179,7 +179,6 @@ also always `local`.
 That means we still can't transfer a password across domains: fork/join requires
 `global` functions, which cannot capture a `local` password.
 
-
 ```ocaml
 let parallel_increment parallel ~(password : 'k Capsule.Password.t @ local) =
   let capsule_ref = Capsule.Data.create (fun () -> ref 0) in

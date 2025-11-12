@@ -1,0 +1,5 @@
+(library
+ (name parallel_command)
+ (libraries async core parallel parallel_async parallel_scheduler)
+ (preprocess
+  (pps ppx_jane)))

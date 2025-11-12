@@ -1,8 +1,6 @@
 open! Core
 open! Import
 
-[@@@alert "-experimental"]
-
 (* $MDX part-begin=fib *)
 let rec fib parallel n =
   match n with
@@ -24,10 +22,9 @@ let fib_sequential n =
 ;;
 
 let fib_parallel n =
-  let scheduler = Parallel_scheduler_work_stealing.create () in
-  Parallel_scheduler_work_stealing.parallel scheduler ~f:(fun parallel ->
-    printf "%d" (fib parallel n));
-  Parallel_scheduler_work_stealing.stop scheduler
+  let scheduler = Parallel_scheduler.create () in
+  Parallel_scheduler.parallel scheduler ~f:(fun parallel -> printf "%d" (fib parallel n));
+  Parallel_scheduler.stop scheduler
 ;;
 
 (* $MDX part-end *)

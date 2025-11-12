@@ -1,9 +1,9 @@
 (library
  (name parallel_test)
  (public_name parallel.test)
- (libraries await await.blocking base_bigstring concurrent core
-   expect_test_helpers_core unboxed.float32 int_repr pair_or_null parallel
-   parallel_scheduler_work_stealing portable portable.test_helpers threads
-   vec)
+ (libraries await await.blocking base_bigstring bignum.bigint concurrent core
+   expect_test_helpers_core unboxed.float32 unboxed.int64_u ocaml_simd.avx
+   pair_or_null parallel parallel_scheduler portable portable.test_helpers
+   stdlib_stable threads vec)
  (preprocess
   (pps ppx_jane)))
