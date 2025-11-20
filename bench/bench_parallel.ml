@@ -175,15 +175,14 @@ module Bench_parallel (Scheduler : Parallel.Scheduler.S) = struct
       ())
   ;;
 
-  (* [n = 14] chosen so the benchmarks take some hundreds of us each, since the default
-     heartbeat interval is 100us. *)
+  (* [n = 16] chosen so each iteration takes about one default heartbeat interval (250us) *)
   let%bench "fast_tree" =
     Scheduler.parallel scheduler ~f:(fun parallel ->
-      let _ : int = fast_tree parallel 14 in
+      let _ : int = fast_tree parallel 16 in
       ())
   ;;
 
-  (* [n = 10] chosen since 3^n grows faster than 2^n.*)
+  (* [n = 10] chosen since 3^n grows faster than 2^n. *)
   let%bench "fast_tree3" =
     Scheduler.parallel scheduler ~f:(fun parallel ->
       let _ : int = fast_tree3 parallel 10 in

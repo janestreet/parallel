@@ -30,7 +30,7 @@ separate scheduler library. Schedulers provide the following function:
 ```ocaml
   (** [parallel t ~f] creates an implementation of parallelism backed by [t], applies [f],
       and waits for it to complete. *)
-  val parallel : t -> f:(parallel @ local -> 'a) @ forkable once portable unyielding -> 'a
+  val parallel : t -> f:(parallel @ local -> 'a) @ once portable -> 'a
 ```
 
 Calling `schedule` provides your parallel computation with a local `Parallel.t`

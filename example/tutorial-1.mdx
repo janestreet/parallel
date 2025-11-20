@@ -751,7 +751,7 @@ for instance, we say that `t_in_a_trenchcoat.inner_t` is `contended` when
 [rule 1]: #rule-contended-parallel
 
 Now, you may be surprised to see that projecting a field from a `contended`
-record gives a `contended` value. After all, we have the function:
+record gives an `uncontended` value. After all, we have the function:
 
 ```ocaml
 let price t = t.price
@@ -1165,15 +1165,13 @@ end
 As you can see, there's a bit of syntactic overhead, but in return we get to
 access `mood` even if a `Thing.t` is `contended`, and in fact we can mark `t` as
 `immutable_data` so that it ignores `contended` and `uncontended` altogether
-(that is, it [crosses contention]). Do go over the documentation in the
-[`Atomic` module], as it has many useful operations,
+(that is, it [crosses contention](#mode-crossing)). Do go over the documentation in the
+`Atomic` module,
+as it has many useful operations,
 from `compare_exchange` to atomic logical bitwise XOR. Also, note that we're
 using Core's `Atomic` here rather than the `Atomic` from OxCaml's standard
 library, which hews closer to the upstream OCaml standard library and doesn't
 support mode crossing.
-
-[crosses contention]: #mode-crossing
-[`Atomic` module]: https://ocaml-docs/portable_kernel/Portable_kernel/Atomic/index.html
 
 An `Atomic.t` can be handy outside of a record as well, in cases where you would
 otherwise use a `ref` to hold mutable state. For example, rather than return
@@ -1278,11 +1276,9 @@ let add_many_par par arr =
   |> Option.value ~default:0
 ```
 
-We first need to convert from `iarray` to [`Parallel.Sequence.t`], a general
-sequence type supporting a rich selection of parallel operations. Among them is
-a parallel `reduce`, which operates much like an unordered `fold`.
-
-[`Parallel.Sequence.t`]: https://ocaml-docs/parallel_sequence/Parallel_sequence/index.html
+We first need to convert from `iarray` to `Parallel.Sequence.t`,
+a general sequence type supporting a rich selection of parallel operations.
+Among them is a parallel `reduce`, which operates much like an unordered `fold`.
 
 Just like `Parallel.fork_join2`, we can use parallel sequences in a nested
 manner. Suppose that rather than a binary tree we have an n-ary tree:

@@ -8,7 +8,8 @@ include module type of struct
   include Parallel_kernel0.Runqueue
 end
 
-val promote : t @ local once -> add_tokens:int -> unit
+val add_tokens : t @ local once -> int -> unit
+val promote : t @ local once -> scheduler:Parallel_kernel0.Scheduler.t -> unit
 
 val with_jobs
   : ('a : value mod portable) 'b.

@@ -21,5 +21,7 @@ let get ?(min = Int.min_value) ?(max = Int.max_value) t ~default =
   i
 ;;
 
-let heartbeat_promotions = get Heartbeat_promotions ~default:10 ~min:0
-let heartbeat_interval_us = get Heartbeat_interval_us ~default:100 ~min:1 ~max:999_999
+(* cf https://dl.acm.org/doi/pdf/10.1145/3632880 for the defaults here *)
+
+let heartbeat_promotions = get Heartbeat_promotions ~default:15 ~min:0
+let heartbeat_interval_us = get Heartbeat_interval_us ~default:250 ~min:1 ~max:999_999

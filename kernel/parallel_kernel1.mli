@@ -10,7 +10,7 @@ end
 module Dynamic : sig
   type 'a t : immutable_data
 
-  val key : Parallel_kernel0.Runqueue.t Stack_pointer.Imm.t t
+  val key : Parallel_kernel0.Parallel.t Stack_pointer.Imm.t t
 end
 
 val with_parallel

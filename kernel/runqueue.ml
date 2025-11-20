@@ -14,61 +14,70 @@ let[@loop] rec count : type l. l node @ local once -> int = function
 ;;
 
 let[@loop] rec promote_loop
-  : nodes @ local -> tokens:int -> f:('a. 'a promoter) @ local -> #(nodes * int)
+  :  nodes @ local -> tokens:int -> promoted:int -> f:('a. 'a promoter) @ local
+  -> #(nodes * tokens:int * promoted:int)
   =
-  fun (Q cursor) ~tokens ~f ->
-  (* Given [n] jobs, we assign each one [(tok - n) / (n + 1)] tokens. This spends
-     one token per promotion, then evenly divides the remaining tokens between
-     the children, including the current fiber (which retains the remainder).
-     Note it is possible to return a negative count. *)
-  (Stack_pointer.use [@kind word & value]) cursor ~f:(function [@inline]
+  fun (Q cursor) ~tokens ~promoted ~f ->
+  (* Given [n] jobs, we assign each one [(tok - n) / (n + 1)] tokens. This spends one
+     token per promotion, then evenly divides the remaining tokens between the children,
+     including the current fiber (which retains the remainder). Note it is possible to
+     return a negative count. *)
+  (Stack_pointer.use [@kind word & value & value]) cursor ~f:(function [@inline]
     | Some node when tokens > 0 ->
       exclave_
       (* Safe since [count] does not consume [node]. *)
       let node = Obj.magic_many node in
       let count = count node in
-      let total = tokens - count in
-      promote_batch node ~total ~each:(total / (count + 1)) ~f
-    | _ -> #(Q cursor, tokens))
+      let tokens = tokens - count in
+      promote_batch node ~tokens ~promoted ~each:(tokens / (count + 1)) ~f
+    | _ -> #(Q cursor, ~tokens, ~promoted))
     [@nontail]
 
 and[@loop] promote_batch
   : type l.
     l node @ local once
-    -> total:int
+    -> tokens:int
+    -> promoted:int
     -> each:int
     -> f:('a. 'a promoter) @ local
-    -> #(nodes * int)
+    -> #(nodes * tokens:int * promoted:int)
   =
-  fun node ~total ~each ~f ->
+  fun node ~tokens ~promoted ~each ~f ->
   (* Each batch of forked jobs is promoted atomically. *)
   match node with
   | Cons1 t ->
     let promise = Promise.start () in
     t.promise <- This promise;
     f t.job promise ~tokens:each;
-    promote_loop t.down ~tokens:(total - each) ~f
+    promote_loop t.down ~tokens:(tokens - each) ~promoted:(promoted + 1) ~f
   | ConsN t ->
     let promise = Promise.start () in
     t.promise <- This promise;
     f t.job promise ~tokens:each;
-    promote_batch t.more ~total:(total - each) ~each ~f
+    promote_batch t.more ~tokens:(tokens - each) ~promoted:(promoted + 1) ~each ~f
 ;;
 
-let do_promote queue ~(f : 'a. 'a promoter) =
-  let #(cursor, remaining) = promote_loop queue.cursor ~tokens:queue.tokens ~f in
-  let promoted = queue.tokens - remaining in
-  queue.tokens <- remaining;
+(* Inline never to guarantee no poll points between reading and writing [queue.tokens].
+   [queue.tokens] could be atomic, but we don't want any extra cost given it is only
+   accessed by one thread. *)
+let[@inline never] add_tokens queue tokens = queue.tokens <- queue.tokens + tokens
+
+let promotions queue ~(f : 'a. 'a promoter) =
+  let start = queue.tokens in
+  let #(cursor, ~tokens:stop, ~promoted) =
+    promote_loop queue.cursor ~tokens:start ~promoted:0 ~f
+  in
+  (* [tokens] may be incremented concurrently, so we do not set it directly to [stop]. *)
+  let used = start - stop in
+  add_tokens queue ~-used;
   queue.cursor <- cursor;
   promoted
 ;;
 
-let promote queue ~add_tokens =
-  let scheduler = queue.scheduler in
-  queue.tokens <- queue.tokens + add_tokens;
+let promote queue ~(scheduler : Parallel_kernel0.Scheduler.t) =
   let promoted =
-    do_promote queue ~f:(fun job promise ~tokens ->
-      scheduler.#promote (Promise.fiber promise job ~scheduler ~tokens))
+    promotions queue ~f:(fun job promise ~tokens ->
+      scheduler.#promote (Promise.try_fiber promise job ~scheduler ~tokens))
   in
   if promoted > 0 then scheduler.#wake ~n:promoted
 ;;
@@ -206,18 +215,14 @@ let[@inline] with_jobs
 
 module For_testing = struct
   let create () = exclave_
-    { tokens = 0
-    ; head = Q (Stack_pointer.null ())
-    ; cursor = Q (Stack_pointer.null ())
-    ; scheduler = #{ promote = (fun _ -> ()); wake = (fun ~n:_ -> ()) }
-    }
+    { tokens = 0; head = Q (Stack_pointer.null ()); cursor = Q (Stack_pointer.null ()) }
   ;;
 
   let tokens t = t.tokens
 
   let promote t ~n ~f =
     t.tokens <- n;
-    do_promote t ~f:(fun _ _ ~tokens -> f ~tokens) |> (ignore : int -> unit)
+    promotions t ~f:(fun _ _ ~tokens -> f ~tokens) |> (ignore : int -> unit)
   ;;
 
   let with_jobs t jobs ~f =

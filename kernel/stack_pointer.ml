@@ -38,7 +38,7 @@ let[@inline] unsafe_with_value (type a) (a : a) ~f = exclave_
 
 let%template[@inline] use t ~f = exclave_
   f (if equal t (null ()) then None else Some (unsafe_to_value t))
-[@@kind k = (value, word & value)]
+[@@kind k = (value, word & value & value)]
 ;;
 
 module Imm = struct

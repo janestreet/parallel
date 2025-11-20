@@ -4,7 +4,6 @@ open! Base
 open! Import
 
 module Kind : sig
-  (** Scalar type stored in the bigstring. *)
   type 'a t =
     | Int8 : int8 t
     | Int16 : int16 t
@@ -12,18 +11,6 @@ module Kind : sig
     | Int64 : int64 t
     | Float32 : float32 t
     | Float64 : float t
-    | Int8x16 : int8x16 t
-    | Int16x8 : int16x8 t
-    | Int32x4 : int32x4 t
-    | Int64x2 : int64x2 t
-    | Float32x4 : float32x4 t
-    | Float64x2 : float64x2 t
-    | Int8x32 : int8x32 t
-    | Int16x16 : int16x16 t
-    | Int32x8 : int32x8 t
-    | Int64x4 : int64x4 t
-    | Float32x8 : float32x8 t
-    | Float64x4 : float64x4 t
   [@@deriving sexp_of]
 
   (** Size of the scalar type in bytes. *)

@@ -1,11 +1,14 @@
 open! Base
 open! Import
 module Hlist = Hlist
+module TLS = Domain.Safe.TLS
 module Pair_or_null = Pair_or_null
 include Parallel_kernel1
 
 module For_scheduler = struct
   module Result = Result
+
+  exception Out_of_fibers = Promise.Out_of_fibers
 
   external acquire : unit -> unit @@ portable = "parallel_acquire_heartbeat" [@@noalloc]
   external release : unit -> unit @@ portable = "parallel_release_heartbeat" [@@noalloc]
@@ -15,32 +18,35 @@ module For_scheduler = struct
     Exn.protect ~f ~finally:release
   ;;
 
-  external acquire_mask : unit -> unit @@ portable = "parallel_acquire_mask" [@@noalloc]
-  external release_mask : unit -> unit @@ portable = "parallel_release_mask" [@@noalloc]
+  let heartbeat_mask = TLS.new_key (fun () -> 0)
 
   let[@inline] without_heartbeat (f @ unyielding) =
-    (* The heartbeat mask is thread-local. [f] is unyielding, so we will not switch
-       threads between the acquire and release. *)
-    acquire_mask ();
-    Exn.protectx ~f () ~finally:release_mask
+    (* [f] is unyielding, so we will not switch threads between acquire and release. *)
+    TLS.set heartbeat_mask (TLS.get heartbeat_mask + 1);
+    Exn.protectx ~f () ~finally:(fun () ->
+      TLS.set heartbeat_mask (TLS.get heartbeat_mask - 1))
   ;;
 
   external setup_heartbeat
     :  interval_us:int
-    -> key:Runqueue.t Stack_pointer.Imm.t Dynamic.t
-    -> callback:(Runqueue.t Stack_pointer.Imm.t @ local -> unit)
+    -> key:t Stack_pointer.Imm.t Dynamic.t
+    -> callback:(t Stack_pointer.Imm.t @ local -> unit)
     -> unit
     = "parallel_setup_heartbeat"
 
-  let[@inline] promote queue ~add_tokens =
-    without_heartbeat (fun () -> Runqueue.promote queue ~add_tokens) [@nontail]
+  let[@inline] promote queue ~scheduler =
+    without_heartbeat (fun () -> Runqueue.promote queue ~scheduler) [@nontail]
   ;;
 
   let callback queue =
     let queue = Stack_pointer.Imm.to_ptr queue in
     Stack_pointer.use queue ~f:(function [@inline]
-      | None -> ()
-      | Some queue -> promote queue ~add_tokens:Env.heartbeat_promotions)
+      | None | Some Sequential -> ()
+      | Some (Parallel { password; queue; scheduler; _ }) ->
+        Capsule.Data.Local.iter queue ~password ~f:(fun [@inline] queue ->
+          Runqueue.add_tokens queue Env.heartbeat_promotions;
+          if TLS.get heartbeat_mask = 0 then promote queue ~scheduler)
+        [@nontail])
       [@nontail]
   ;;
 
@@ -48,9 +54,9 @@ module For_scheduler = struct
     setup_heartbeat ~interval_us:Env.heartbeat_interval_us ~key:Dynamic.key ~callback
   ;;
 
-  let root f ~promote ~wake =
+  let root_exn f ~promote ~wake =
     let (P key) = Capsule.create () in
-    Promise.fiber
+    Promise.fiber_exn
       (Promise.start ())
       (fun parallel ->
         f parallel;
@@ -125,9 +131,9 @@ module Scheduler = struct
     ;;
   end
 
-  let[@inline] use_tokens ~queue ~password =
+  let[@inline] use_tokens ~queue ~password ~scheduler =
     Capsule.Data.Local.iter queue ~password ~f:(fun [@inline] (queue : Runqueue.t) ->
-      if queue.tokens > 0 then For_scheduler.promote queue ~add_tokens:0)
+      if queue.tokens > 0 then For_scheduler.promote queue ~scheduler)
     [@nontail]
   ;;
 
@@ -142,9 +148,10 @@ module Scheduler = struct
   let[@inline] heartbeat t ~n =
     match t with
     | Sequential -> ()
-    | Parallel { queue; password; _ } ->
-      Capsule.Data.Local.iter queue ~password ~f:(fun [@inline] (queue : Runqueue.t) ->
-        For_scheduler.promote queue ~add_tokens:n)
+    | Parallel { queue; password; scheduler; _ } ->
+      Capsule.Data.Local.iter queue ~password ~f:(fun [@inline] queue ->
+        Runqueue.add_tokens queue n;
+        if queue.tokens > 0 then For_scheduler.promote queue ~scheduler)
       [@nontail]
   ;;
 
@@ -185,8 +192,8 @@ let[@inline never] fork_join_seq t ff =
 let[@inline] fork_join (type l) t (ff : l Hlist.Gen(Thunk).t) : l Hlist.t =
   match t with
   | Sequential -> fork_join_seq t ff
-  | Parallel { queue; password; _ } ->
-    Scheduler.use_tokens ~queue ~password;
+  | Parallel { queue; password; scheduler; _ } ->
+    Scheduler.use_tokens ~queue ~password ~scheduler;
     (match ff with
      | [] -> []
      | [ f ] -> unwrap [ Thunk.apply f t ] [@nontail]
@@ -202,11 +209,11 @@ let[@inline never] fork_join2_seq t f1 f2 =
   #(a, b)
 ;;
 
-let[@inline] fork_join2 t (f1 @ local nonportable once) f2 =
+let[@inline] fork_join2 t f1 f2 =
   match t with
   | Sequential -> fork_join2_seq t f1 f2
-  | Parallel { queue; password; _ } ->
-    Scheduler.use_tokens ~queue ~password;
+  | Parallel { queue; password; scheduler; _ } ->
+    Scheduler.use_tokens ~queue ~password ~scheduler;
     let #(first, rest) = Scheduler.with_jobs t ~queue ~password f1 [ f2 ] in
     let [ a; b ] = unwrap_encapsulated first rest.contended in
     #(a, b)
@@ -223,8 +230,8 @@ let[@inline never] fork_join3_seq t f1 f2 f3 =
 let[@inline] fork_join3 t f1 f2 f3 =
   match t with
   | Sequential -> fork_join3_seq t f1 f2 f3
-  | Parallel { queue; password; _ } ->
-    Scheduler.use_tokens ~queue ~password;
+  | Parallel { queue; password; scheduler; _ } ->
+    Scheduler.use_tokens ~queue ~password ~scheduler;
     let #(first, rest) = Scheduler.with_jobs t ~queue ~password f1 [ f2; f3 ] in
     let [ a; b; c ] = unwrap_encapsulated first rest.contended in
     #(a, b, c)
@@ -244,8 +251,8 @@ let[@inline never] fork_join4_seq t f1 f2 f3 f4 =
 let[@inline] fork_join4 t f1 f2 f3 f4 =
   match t with
   | Sequential -> fork_join4_seq t f1 f2 f3 f4
-  | Parallel { queue; password; _ } ->
-    Scheduler.use_tokens ~queue ~password;
+  | Parallel { queue; password; scheduler; _ } ->
+    Scheduler.use_tokens ~queue ~password ~scheduler;
     let #(first, rest) = Scheduler.with_jobs t ~queue ~password f1 [ f2; f3; f4 ] in
     let [ a; b; c; d ] = unwrap_encapsulated first rest.contended in
     #(a, b, c, d)
@@ -266,8 +273,8 @@ let[@inline never] fork_join5_seq t f1 f2 f3 f4 f5 =
 let[@inline] fork_join5 t f1 f2 f3 f4 f5 =
   match t with
   | Sequential -> fork_join5_seq t f1 f2 f3 f4 f5
-  | Parallel { queue; password; _ } ->
-    Scheduler.use_tokens ~queue ~password;
+  | Parallel { queue; password; scheduler; _ } ->
+    Scheduler.use_tokens ~queue ~password ~scheduler;
     let #(first, rest) = Scheduler.with_jobs t ~queue ~password f1 [ f2; f3; f4; f5 ] in
     let [ a; b; c; d; e ] = unwrap_encapsulated first rest.contended in
     #(a, b, c, d, e)
@@ -289,8 +296,8 @@ let[@inline] fork_on_heartbeat t ~grain ~continue ~fork ~join =
 
 (* Implemented as a separate function from [fold] for speed. *)
 let[@inline] for_ t ~start ~stop ~f =
-  (* [grain] is the number of sequential iterations between heartbeat checks.
-     It increases geometrically until a heartbeat occurs. *)
+  (* [grain] is the number of sequential iterations between heartbeat checks. It increases
+     geometrically until a heartbeat occurs. *)
   let[@inline] [@loop] rec aux t ~start ~stop ~grain =
     if start >= stop
     then ()

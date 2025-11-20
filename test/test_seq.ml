@@ -129,8 +129,8 @@ module Test_scheduler (Scheduler : Parallel.Scheduler.S) = struct
       | Empty -> ()
       | Leaf i -> printf "%d" i
       | Node (l, r) ->
-        (* Only print the contents in order; don't reveal the structure of
-           the tree, which depends on the choice of fold associativity. *)
+        (* Only print the contents in order; don't reveal the structure of the tree, which
+           depends on the choice of fold associativity. *)
         print_tree l;
         print_tree r
     ;;

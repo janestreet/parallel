@@ -32,7 +32,6 @@ static heartbeat_refcount_t heartbeat_refcount = {PTHREAD_MUTEX_INITIALIZER,
 static value heartbeat_fls_key;
 static value heartbeat_callback;
 static uintnat heartbeat_interval_us;
-CAMLthread_local static uintnat heartbeat_mask;
 
 static void (*existing_domain_external_interrupt_hook)(void);
 
@@ -42,10 +41,8 @@ static void parallel_domain_external_interrupt_hook() {
 
   if (atomic_fetch_and_explicit(request, mask, memory_order_seq_cst) &
       HB_INTERRUPT_FLAG) {
-    if (heartbeat_mask == 0) {
-      value pointer = caml_dynamic_get(heartbeat_fls_key);
-      caml_callback(heartbeat_callback, pointer);
-    }
+    value pointer = caml_dynamic_get(heartbeat_fls_key);
+    caml_callback(heartbeat_callback, pointer);
   }
 
   if (existing_domain_external_interrupt_hook) {
@@ -177,16 +174,6 @@ CAMLprim value parallel_release_heartbeat(__attribute__((unused)) value unit) {
   return Val_unit;
 }
 
-CAMLprim value parallel_acquire_mask(__attribute__((unused)) value unit) {
-  heartbeat_mask++;
-  return Val_unit;
-}
-
-CAMLprim value parallel_release_mask(__attribute__((unused)) value unit) {
-  heartbeat_mask--;
-  return Val_unit;
-}
-
 #else /* CAML_RUNTIME_5 */
 
 CAMLprim value parallel_create_dynamic(__attribute__((unused)) value key) {
@@ -209,15 +196,6 @@ CAMLprim value parallel_release_heartbeat(__attribute__((unused)) value unit) {
 CAMLprim value parallel_setup_heartbeat(__attribute__((unused)) value interval_us,
                                         __attribute__((unused)) value key,
                                         __attribute__((unused)) value callback) {
-  return Val_unit;
-}
-
-CAMLprim value parallel_acquire_mask(__attribute__((unused)) value unit) {
-
-  return Val_unit;
-}
-
-CAMLprim value parallel_release_mask(__attribute__((unused)) value unit) {
   return Val_unit;
 }
 

@@ -60,13 +60,12 @@ and Runqueue : sig @@ portable
     { mutable tokens : int
     ; mutable head : nodes
     ; mutable cursor : nodes
-    ; scheduler : Scheduler.t @@ global many
     }
 end =
   Runqueue
 
 and Scheduler : sig @@ portable
-  type t =
+  type t : (value & value) mod contended portable =
     #{ promote : (unit -> unit) @ once portable -> unit @@ portable
      ; wake : n:int -> unit @@ portable
      }
@@ -77,9 +76,10 @@ and Parallel : sig @@ portable
   type%fuelproof t : value mod contended portable =
     | Sequential
     | Parallel :
-        { password : 'k Capsule.Password.t
+        { password : 'k Capsule.Password.t @@ many
         ; queue : (Runqueue.t, 'k) Capsule.Data.t
         ; handler : Wait.t Effect.Handler.t @@ contended portable
+        ; scheduler : Scheduler.t @@ global many
         }
         -> t
 end =

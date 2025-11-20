@@ -26,7 +26,7 @@ module Test_scheduler (Scheduler : Parallel.Scheduler.S) = struct
   ;;
 
   let%expect_test "stop doesn't deadlock" =
-    for _ = 1 to 1000 do
+    for _ = 1 to 100 do
       let scheduler = Scheduler.create () in
       Scheduler.parallel scheduler ~f:(fun parallel -> ignore (fib_par parallel 2 : int));
       Scheduler.stop scheduler

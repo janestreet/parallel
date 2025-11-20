@@ -6,8 +6,8 @@ module Sequential = Scheduler.Sequential
 module Scheduler = For_scheduler
 module Result = Scheduler.Result.Capsule
 
-(* Given N total domains, queue 0 is used by the initial domain and queues
-   1..N-1 are used by worker domains. *)
+(* Given N total domains, queue 0 is used by the initial domain and queues 1..N-1 are used
+   by worker domains. *)
 type t =
   | Single_domain of
       { sequential : Sequential.t
@@ -87,7 +87,7 @@ let parallel t ~f =
     let wake ~n = Work_deqs.try_wake queues ~n in
     let result = Mvar.create () in
     let root =
-      Scheduler.root ~promote ~wake (fun parallel ->
+      Scheduler.root_exn ~promote ~wake (fun parallel ->
         let res = Result.try_with (fun () -> f parallel) in
         Mvar.put_exn result { many = Result.globalize res };
         Work_deqs.wake queues ~idx:0)
@@ -115,9 +115,11 @@ module Spawn = struct
         Multicore.spawn_on
           ~domain:0
           (fun r ->
-            let scheduler = Sequential.create () in
-            Sequential.parallel scheduler ~f:(fun c -> f c r);
-            Atomic.decr threads)
+            Exn.protect
+              ~f:(fun () ->
+                let scheduler = Sequential.create () in
+                Sequential.parallel scheduler ~f:(fun c -> f c r))
+              ~finally:(fun () -> Atomic.decr threads) [@nontail])
           r
       with
       | Spawned -> Concurrent.Spawned
@@ -145,18 +147,30 @@ module Spawn = struct
   ;;
 
   let fiber ~queues =
-    let spawn_fiber f ~queues =
+    let spawn_fiber r f ~queues =
       let promote job = Work_deqs.push queues job in
       let wake ~n = Work_deqs.try_wake queues ~n in
-      let root = Scheduler.root f ~promote ~wake in
-      Work_deqs.push queues root;
-      Work_deqs.wake_one queues;
-      Concurrent.Spawned
+      (* SAFETY: [r] is either consumed by [f] or returned via [Failed]. *)
+      let r = (Obj.magic_many [@mode contended portable unique]) r in
+      let f parallel =
+        let r = (Obj.magic_unique [@mode contended portable]) r in
+        f parallel r
+      in
+      match Scheduler.root_exn f ~promote ~wake with
+      | root ->
+        Work_deqs.push queues root;
+        Work_deqs.wake_one queues;
+        Concurrent.Spawned
+      | exception (Scheduler.Out_of_fibers as exn) ->
+        (* SAFETY: see above *)
+        let r = (Obj.magic_unique [@mode contended portable]) r in
+        let bt = Backtrace.Exn.most_recent () in
+        Concurrent.Failed (r, exn, bt)
     in
     let rec spawn : type r a. (r, a, Parallel_kernel.t) Concurrent.spawn_fn =
       fun scope ~f r ->
       let token = Scope.add scope in
-      spawn_fiber ~queues (fun parallel ->
+      spawn_fiber ~queues r (fun parallel r ->
         Scope.Token.use token ~f:(fun [@inline] terminator scope ->
           with_concurrent parallel terminator ~f:(fun [@inline] c -> f scope parallel c r)
           [@nontail])

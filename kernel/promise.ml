@@ -91,10 +91,12 @@ let[@inline] [@loop] rec continue
        (match Unique.Atomic.exchange t Claimed with
         | Blocking { key; cont } -> continue a ~scheduler ~key ~cont
         | Start | Claimed | Ready _ ->
-          (* Impossible: the promise has been [fill]ed, so we are the only writer, and we just wrote [Blocking]. *)
+          (* Impossible: the promise has been [fill]ed, so we are the only writer, and we
+             just wrote [Blocking]. *)
           assert false)
      | Start | Blocking _ ->
-       (* Impossible: unclaimed jobs are never [await]ed, and claimed jobs are [await]ed exactly once. *)
+       (* Impossible: unclaimed jobs are never [await]ed, and claimed jobs are [await]ed
+          exactly once. *)
        assert false)
 ;;
 
@@ -105,9 +107,11 @@ let[@inline] fill t a ~(scheduler : Parallel_kernel0.Scheduler.t) =
     (match Unique.Atomic.exchange t Claimed with
      | Ready a ->
        scheduler.#promote (fun () -> continue a ~scheduler ~key ~cont)
-       (* We do not call [scheduler.#wake], as this worker is about to return to the scheduler. *)
+       (* We do not call [scheduler.#wake], as this worker is about to return to the
+          scheduler. *)
      | Start | Claimed | Blocking _ ->
-       (* Impossible: the promise has been [await]ed, so only we are the only writer, and we just wrote [Ready]. *)
+       (* Impossible: the promise has been [await]ed, so only we are the only writer, and
+          we just wrote [Ready]. *)
        assert false)
   | Start | Ready _ ->
     (* Impossible: we claimed the job, and claimed jobs are [fill]ed exactly once. *)
@@ -125,7 +129,8 @@ let[@inline] await_or_run t job parallel = exclave_
          (Promise t) [@nontail]
      | Ready a -> a
      | Start | Blocking _ ->
-       (* Impossible: the job is already claimed, and claimed jobs are [await]ed exactly once. *)
+       (* Impossible: the job is already claimed, and claimed jobs are [await]ed exactly
+          once. *)
        assert false)
 ;;
 
@@ -144,15 +149,31 @@ let[@inline] apply t job ~scheduler ~tokens ~handler =
   | Compare_failed -> ()
 ;;
 
-let[@inline] fiber t job ~scheduler ~tokens () =
-  let (P key) = Capsule.create () in
+let[@inline] create_fiber t job ~scheduler ~tokens ~key =
   let #({ many = cont }, key) =
     Capsule.Key.access key ~f:(fun [@inline] access ->
       let k =
-        (Wait.Contended.fiber [@alert "-experimental"]) (fun handler { portable = () } ->
-          apply t job ~scheduler ~tokens ~handler)
+        (Wait.Contended.fiber [@alert "-experimental_runtime5"])
+          (fun handler { portable = () } -> apply t job ~scheduler ~tokens ~handler)
       in
       { many = Capsule.Data.wrap_unique ~access k })
   in
-  continue () ~scheduler ~key ~cont [@tail]
+  #(cont, key)
+;;
+
+exception Out_of_fibers
+
+let fiber_exn t job ~scheduler ~tokens =
+  let (P key) = Capsule.create () in
+  match create_fiber t job ~scheduler ~tokens ~key with
+  | #(cont, key) -> fun () -> continue () ~scheduler ~key ~cont
+  | exception Out_of_memory -> raise Out_of_fibers
+;;
+
+let try_fiber t job ~scheduler ~tokens () =
+  let (P key) = Capsule.create () in
+  (* If we fail to allocate a fiber, we drop the job without claiming the promise. *)
+  match create_fiber t job ~scheduler ~tokens ~key with
+  | #(cont, key) -> continue () ~scheduler ~key ~cont
+  | exception Out_of_memory -> ()
 ;;

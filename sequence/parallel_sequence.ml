@@ -460,9 +460,8 @@ module With_length = struct
             let #(outer0, outer1) = outer in
             Pair_or_null.some (Prod (outer0, inner)) (Prod (outer1, inner))
           | None ->
-            (*  ((n_outer = 0) or (n_outer = len_outer)) and (n % len_inner = 0)
-             -> (n = 0) or (n = len)
-             -> unreachable *)
+            (* ((n_outer = 0) or (n_outer = len_outer)) and (n % len_inner = 0) -> (n = 0)
+               or (n = len) -> unreachable *)
             assert false)
         else (
           let n_outer = n / len_inner in
@@ -480,13 +479,11 @@ module With_length = struct
                let seq1 = Consl (a, inner1, Prod (outer1, inner)) in
                Pair_or_null.some seq0 seq1
              | None ->
-               (*  length outer1 = 0
-                -> unreachable *)
+               (* length outer1 = 0 -> unreachable *)
                assert false)
           | None, Some inner' ->
-            (*  ((n_outer = 0) or (n_outer = len_outer)) and (n < len)
-             -> n < len_inner
-             -> splitting seq1 preserves order *)
+            (* ((n_outer = 0) or (n_outer = len_outer)) and (n < len) -> n < len_inner ->
+               splitting seq1 preserves order *)
             let #(inner0, inner1) = inner' in
             (match%optional_u.Pair_or_null next0 parallel outer with
              | Some a_outer ->
@@ -495,11 +492,10 @@ module With_length = struct
                let seq1 = Consl (a, inner1, Prod (outer, inner)) in
                Pair_or_null.some seq0 seq1
              | None ->
-               (*  length outer1 = 0
-                -> unreachable *)
+               (* length outer1 = 0 -> unreachable *)
                assert false)
           | _, None ->
-            (*  (n_inner = 0) or (n_inner = len_inner)
+            (*= (n_inner = 0) or (n_inner = len_inner)
              -> n % len_inner = 0
              -> unreachable *)
             assert false)
@@ -614,7 +610,7 @@ module With_length = struct
       ~combine:(fun _ a b -> Option.first_some a b) [@nontail]
   ;;
 
-  let to_list parallel (t : 'a t) =
+  let to_list_rev parallel (t : 'a t) =
     match t with
     | Known ({ current; next; _ } as known) ->
       parallel_fold
@@ -625,8 +621,9 @@ module With_length = struct
         ~next
         ~split:(split_middle known)
         ~combine:(fun _ a b -> b @ a)
-      |> List.rev
   ;;
+
+  let to_list parallel t = to_list_rev parallel t |> List.rev
 
   let unsafe_to_array parallel (Known seq : _ t) =
     let length = seq.length seq.current in
@@ -1013,7 +1010,7 @@ let find parallel (t : 'a t) ~f =
     ~combine:(fun _ a b -> Option.first_some a b) [@nontail]
 ;;
 
-let to_list parallel (t : 'a t) =
+let to_list_rev parallel (t : 'a t) =
   match t with
   | Unknown { current; next; split } ->
     parallel_fold
@@ -1024,12 +1021,13 @@ let to_list parallel (t : 'a t) =
       ~next
       ~split
       ~combine:(fun _ a b -> b @ a)
-    |> List.rev
-  | Known _ as t -> With_length.to_list parallel t
+  | Known _ as t -> With_length.to_list_rev parallel t
 ;;
+
+let to_list parallel t = to_list_rev parallel t |> List.rev
 
 let to_iarray parallel t =
   match t with
-  | Unknown _ -> to_list parallel t |> Iarray.of_list
+  | Unknown _ -> to_list_rev parallel t |> Iarray.of_list_rev
   | Known _ as t -> With_length.to_iarray parallel t
 ;;

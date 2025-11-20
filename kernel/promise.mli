@@ -7,10 +7,12 @@ include module type of struct
   include Parallel_kernel0.Promise
 end
 
+exception Out_of_fibers
+
 val start : unit -> 'a t
 
-(** [fiber t job ~scheduler ~tokens] attaches [t] to [job] and returns a fiber [f] that
-    may be executed on another domain. [f] starts with [tokens] promotion tokens.
+(** [fiber_exn t job ~scheduler ~tokens] attaches [t] to [job] and allocates a fiber [f]
+    that may be executed on another domain. [f] starts with [tokens] promotion tokens.
 
     Applying [f] returns after one of three conditions are met.
 
@@ -22,10 +24,21 @@ val start : unit -> 'a t
       or the trigger is signaled, [f] is resubmitted to [scheduler].
 
     - If [job] returns a result and another fiber is awaiting [t], [f] resubmits the
-      awaiter to [scheduler]. Otherwise, [f] stores the result in [t]. *)
-val fiber
+      awaiter to [scheduler]. Otherwise, [f] stores the result in [t].
+
+    @raise Out_of_fibers if unable to allocate a fiber. *)
+val fiber_exn
   :  'a t
-  -> 'a Parallel_kernel1.Job.t @ forkable once portable unyielding
+  -> 'a Parallel_kernel1.Job.t @ once portable
+  -> scheduler:Parallel_kernel0.Scheduler.t
+  -> tokens:int
+  -> (unit -> unit) @ once portable
+
+(** Like [fiber], but does not attempt to allocate the fiber until [f] is applied. If [f]
+    fails to allocate the fiber, it returns without executing [job] or claiming [t]. *)
+val try_fiber
+  :  'a t
+  -> 'a Parallel_kernel1.Job.t @ once portable
   -> scheduler:Parallel_kernel0.Scheduler.t
   -> tokens:int
   -> (unit -> unit) @ once portable
@@ -46,6 +59,6 @@ val fiber
     [job] by a previous call to [fiber t job]. *)
 val await_or_run
   :  'a t
-  -> 'a Parallel_kernel1.Job.t @ forkable once portable unyielding
+  -> 'a Parallel_kernel1.Job.t @ once portable
   -> Parallel_kernel1.t @ local
   -> 'a Result.Capsule.t @ local unique

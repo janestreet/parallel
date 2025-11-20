@@ -114,18 +114,22 @@ end
 module For_scheduler : sig
   module Result = Result
 
-  (** [root f ~promote ~wake] creates a top-level, schedulable task representing the full
-      execution of [f]. The functions [f], [promote], and [wake] must not raise
-      exceptions. All schedulers must use [root] to create the initial portable function
-      they inject into the worker pool.
+  exception Out_of_fibers
+
+  (** [root_exn f ~promote ~wake] creates a top-level, schedulable task representing the
+      full execution of [f]. The functions [f], [promote], and [wake] must not raise
+      exceptions. All schedulers must use [root_exn] to create the initial portable
+      function they inject into the worker pool.
 
       The functions [promote] and [wake] define the behavior of the scheduler. When the
       heartbeat mechanism determines enough work has occurred to amortize promotion
       overhead, it calls [promote], which gives the scheduler an opportunity to distribute
       tasks to other domains. After promoting [n] tasks, [wake ~n] is called, which tells
       the scheduler how many workers it may want to wake up. If a heartbeat occurs during
-      [promote] or [wake], they may be re-entered. *)
-  val root
+      [promote] or [wake], they may be re-entered.
+
+      @raise Out_of_fibers if unable to allocate a fiber. *)
+  val root_exn
     :  unit Thunk.t @ once portable
     -> promote:((unit -> unit) @ once portable -> unit) @ portable
     -> wake:(n:int -> unit) @ portable

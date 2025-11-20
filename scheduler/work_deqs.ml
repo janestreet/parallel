@@ -20,7 +20,7 @@ end = struct
     Scheduler.without_heartbeat (fun () ->
       (* Safety: elements are pushed into the deque exactly once, and either popped or
          stolen exactly once. *)
-      Portable_ws_deque.push t ((Obj.magic_many [@mode uncontended portable aliased]) f))
+      Portable_ws_deque.push t ((Obj.magic_many [@mode portable]) f))
     [@nontail]
   ;;
 
@@ -48,7 +48,7 @@ type t =
 
 let create_one () =
   let queue = Once_deq.create () in
-  let sleepy = Awaitable.make_alone false in
+  let sleepy = Awaitable.make ~padded:true false in
   (* NOTE: We're not actually protecting any data in this mutex's capsule; we're just
      using it to synchronize [stealer] and [sleepy], which are both atomic. *)
   let (P key) = Capsule.Expert.create () in
@@ -58,7 +58,7 @@ let create_one () =
 
 let create ~domains =
   let queues = Iarray.init domains ~f:(fun _ -> create_one ()) in
-  let sleepers = Atomic.make_alone 0 in
+  let sleepers = Atomic.make ~padded:true 0 in
   { queues; sleepers }
 ;;
 
@@ -74,9 +74,9 @@ let[@inline] wake' { queues; _ } ~idx =
      very long; all critical sections are bounded and short. *)
   Await_spinning.with_await Terminator.never ~f:(fun await ->
     Mutex.with_password await mutex ~f:(fun _ : bool ->
-      (* We first [Atomic.get] because it's more efficient (on x86) to do a nonatomic
-         load to check that we want to attempt waking before the atomic exchange, which
-         locks the cache line (test-and-test-and-set). *)
+      (* We first [Atomic.get] because it's more efficient (on x86) to do a nonatomic load
+         to check that we want to attempt waking before the atomic exchange, which locks
+         the cache line (test-and-test-and-set). *)
       let wake = Awaitable.get sleepy in
       if wake && Awaitable.exchange sleepy false then Awaitable.signal sleepy;
       wake))

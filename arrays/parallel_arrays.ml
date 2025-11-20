@@ -1450,8 +1450,8 @@ module Bigstring = struct
       slice.array
       ~pos:slice.start
       ~len:(slice.stop - slice.start)
-    (* An uncontended/shared slice indicates uncontended/shared access to the
-       protected index range. *)
+    (* An uncontended/shared slice indicates uncontended/shared access to the protected
+       index range. *)
     |> Obj.magic_uncontended
   [@@mode m = (uncontended, shared)]
   ;;

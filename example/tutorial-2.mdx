@@ -17,17 +17,15 @@ The [first parallelism tutorial](./tutorial-1.mdx) introduced the
 contention and portability mode axes, showcasing their use in fork/join
 parallelism and parallel sequences.  However, it only covered one way to share
 mutable data between `portable` functions:
-[atomics](https://ocaml-docs/portable_kernel/Portable_kernel/Atomic/index.html).
+atomics.
 In this tutorial, we'll see how
-[_capsules_](https://ocaml-docs/portable_kernel/Portable_kernel/Capsule/index.html)
-and [_parallel
-arrays_](https://ocaml-docs/parallel_arrays/Parallel_arrays/index.html)
+_capsules_
+and _parallel arrays_
 can be used parallelize programs that operate on more complex mutable data.
 
 ## Capsules
 
-_This tutorial uses the ["expert" capsule
-API](https://ocaml-docs/basement/Basement/Capsule/index.html), which
+_This tutorial uses the "expert" capsule API, which
 is explained in more detail [here](./capsules.mdx).  For a brief
 overview, read on._
 
