@@ -3,7 +3,7 @@
  (public_name parallel.test)
  (libraries async await await.blocking base_bigstring bignum.bigint
    concurrent core expect_test_helpers_core unboxed.float32 unboxed.int64_u
-   ocaml_simd.sse pair_or_null parallel parallel_scheduler portable
+   pair_or_null parallel parallel_scheduler portable
    portable.test_helpers stdlib_stable threads vec)
  (preprocess
   (pps ppx_jane)))
