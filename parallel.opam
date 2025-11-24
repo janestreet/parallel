@@ -20,6 +20,7 @@ depends: [
   "concurrent"
   "core"
   "expect_test_helpers_core"
+  "ocaml_simd"
   "oxcaml_effect"
   "portable"
   "portable_ws_deque"
