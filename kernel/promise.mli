@@ -7,12 +7,11 @@ include module type of struct
   include Parallel_kernel0.Promise
 end
 
-exception Out_of_fibers
-
 val start : unit -> 'a t
 
-(** [fiber_exn t job ~scheduler ~tokens] attaches [t] to [job] and allocates a fiber [f]
-    that may be executed on another domain. [f] starts with [tokens] promotion tokens.
+(** [fiber_exn t job ~scheduler ~tokens ~lazy_] attaches [t] to [job] and allocates a
+    fiber [f] that may be executed on another domain. [f] starts with [tokens] promotion
+    tokens.
 
     Applying [f] returns after one of three conditions are met.
 
@@ -26,12 +25,15 @@ val start : unit -> 'a t
     - If [job] returns a result and another fiber is awaiting [t], [f] resubmits the
       awaiter to [scheduler]. Otherwise, [f] stores the result in [t].
 
-    @raise Out_of_fibers if unable to allocate a fiber. *)
+    @raise Out_of_fibers
+      if unable to allocate a fiber. If [lazy_] is set, the promise's executor will raise
+      this execption to top level. *)
 val fiber_exn
   :  'a t
   -> 'a Parallel_kernel1.Job.t @ once portable
   -> scheduler:Parallel_kernel0.Scheduler.t
   -> tokens:int
+  -> lazy_:bool
   -> (unit -> unit) @ once portable
 
 (** Like [fiber], but does not attempt to allocate the fiber until [f] is applied. If [f]

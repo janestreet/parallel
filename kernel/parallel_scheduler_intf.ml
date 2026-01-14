@@ -22,7 +22,7 @@ module type S = sig
 
   (** [parallel t ~f] creates an implementation of parallelism backed by [t], applies [f],
       and waits for it to complete. *)
-  val parallel : t -> f:(parallel @ local -> 'a) @ once portable -> 'a
+  val parallel : t -> f:(parallel @ local -> 'a) @ once shareable -> 'a
 
   (* $MDX part-end *)
 end
@@ -44,7 +44,7 @@ module type S_concurrent = sig
   val concurrent
     :  t
     -> terminator:Await.Terminator.t @ local
-    -> f:(parallel Concurrent.t @ local portable -> 'a) @ once portable
+    -> f:(parallel Concurrent.t @ local portable -> 'a) @ once shareable
     -> 'a
 
   module Expert : sig

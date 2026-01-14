@@ -1,4 +1,5 @@
 open! Base
+module Option_u = Unboxed_datatypes.Option_u
 
 module Array : sig @@ portable
   include module type of Array

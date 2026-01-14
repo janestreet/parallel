@@ -5,6 +5,7 @@ open! Import
 
 module Kind : sig
   type 'a t =
+    | Char : char t
     | Int8 : int8 t
     | Int16 : int16 t
     | Int32 : int32 t
@@ -52,6 +53,11 @@ val length : 'a t @ contended -> int
 (** [copy t] duplicates [t]. *)
 val%template copy : 'a t @ m -> 'a t @ m
 [@@mode m = (uncontended, shared)]
+
+(** [of_string s] is a new character bigstring initialized by copying the contents of the
+    string [s]. The optional arguments [pos] and [len] are forwarded to
+    {!Base_bigstring.of_string} *)
+val of_string : ?pos:int -> ?len:int -> string -> char t
 
 (** [get t i] loads the scalar at index [i].
 

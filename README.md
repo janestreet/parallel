@@ -8,13 +8,16 @@ To expose an opportunity for parallelism, user code calls a `fork_join` function
 ```ocaml
 (** [fork_join2 t f g] runs [f] and [g] as parallel tasks and returns their results. If
     either task raises, this operation will reraise the leftmost exception after both
-    tasks have completed or raised.
+    tasks have completed or raised. Child tasks must not block on each other or the parent
+    task, but they may take locks.
 
-    Child tasks must not block on each other or the parent task, but they may take locks. *)
+    [f] and [g] are [shareable], so can capture both [shared] and [uncontended]
+    references. This allows the tasks to read (but not mutate) state from the environment.
+    [f] is also [forkable], so cannot capture capsule passwords. *)
 val fork_join2
   :  t @ local
-  -> (t @ local -> 'a) @ local once
-  -> (t @ local -> 'b) @ once portable
+  -> (t @ local -> 'a) @ forkable local once shareable
+  -> (t @ local -> 'b) @ once shareable
   -> #('a * 'b)
 ```
 
@@ -30,7 +33,7 @@ separate scheduler library. Schedulers provide the following function:
 ```ocaml
   (** [parallel t ~f] creates an implementation of parallelism backed by [t], applies [f],
       and waits for it to complete. *)
-  val parallel : t -> f:(parallel @ local -> 'a) @ once portable -> 'a
+  val parallel : t -> f:(parallel @ local -> 'a) @ once shareable -> 'a
 ```
 
 Calling `schedule` provides your parallel computation with a local `Parallel.t`

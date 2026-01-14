@@ -8,6 +8,9 @@ module Hlist = Hlist
     tasks take a [t] that provides an implementation of parallelism for them to use. *)
 type t : value mod contended portable
 
+(** A trivial implementation of parallelism that runs all tasks sequentially. *)
+val sequential : t
+
 module Thunk : sig
   type nonrec 'a t = t @ local -> 'a
 end
@@ -17,19 +20,22 @@ end
     exception after all tasks have completed or raised.
 
     Child tasks must not block on each other or the parent task, but they may take locks. *)
-val fork_join : t @ local -> 'a Hlist.Gen(Thunk).t @ once portable -> 'a Hlist.t
+val fork_join : t @ local -> 'l Hlist.Gen(Thunk).t @ once shareable -> 'l Hlist.t
 
 (* $MDX part-begin=fork_join2 *)
 
 (** [fork_join2 t f g] runs [f] and [g] as parallel tasks and returns their results. If
     either task raises, this operation will reraise the leftmost exception after both
-    tasks have completed or raised.
+    tasks have completed or raised. Child tasks must not block on each other or the parent
+    task, but they may take locks.
 
-    Child tasks must not block on each other or the parent task, but they may take locks. *)
+    [f] and [g] are [shareable], so can capture both [shared] and [uncontended]
+    references. This allows the tasks to read (but not mutate) state from the environment.
+    [f] is also [forkable], so cannot capture capsule passwords. *)
 val fork_join2
   :  t @ local
-  -> (t @ local -> 'a) @ local once
-  -> (t @ local -> 'b) @ once portable
+  -> (t @ local -> 'a) @ forkable local once shareable
+  -> (t @ local -> 'b) @ once shareable
   -> #('a * 'b)
 
 (* $MDX part-end *)
@@ -37,29 +43,65 @@ val fork_join2
 (** See {!fork_join2} *)
 val fork_join3
   :  t @ local
-  -> (t @ local -> 'a) @ local once
-  -> (t @ local -> 'b) @ once portable
-  -> (t @ local -> 'c) @ once portable
+  -> (t @ local -> 'a) @ forkable local once shareable
+  -> (t @ local -> 'b) @ once shareable
+  -> (t @ local -> 'c) @ once shareable
   -> #('a * 'b * 'c)
 
 (** See {!fork_join2} *)
 val fork_join4
   :  t @ local
-  -> (t @ local -> 'a) @ local once
-  -> (t @ local -> 'b) @ once portable
-  -> (t @ local -> 'c) @ once portable
-  -> (t @ local -> 'd) @ once portable
+  -> (t @ local -> 'a) @ forkable local once shareable
+  -> (t @ local -> 'b) @ once shareable
+  -> (t @ local -> 'c) @ once shareable
+  -> (t @ local -> 'd) @ once shareable
   -> #('a * 'b * 'c * 'd)
 
 (** See {!fork_join2} *)
 val fork_join5
   :  t @ local
-  -> (t @ local -> 'a) @ local once
-  -> (t @ local -> 'b) @ once portable
-  -> (t @ local -> 'c) @ once portable
-  -> (t @ local -> 'd) @ once portable
-  -> (t @ local -> 'e) @ once portable
+  -> (t @ local -> 'a) @ forkable local once shareable
+  -> (t @ local -> 'b) @ once shareable
+  -> (t @ local -> 'c) @ once shareable
+  -> (t @ local -> 'd) @ once shareable
+  -> (t @ local -> 'e) @ once shareable
   -> #('a * 'b * 'c * 'd * 'e)
+
+module Biased : sig
+  (** Like {!fork_join2}, but runs the leftmost task in the current capsule. *)
+  val fork_join2
+    :  t @ local
+    -> (t @ local -> 'a) @ local once
+    -> (t @ local -> 'b) @ once portable
+    -> #('a * 'b)
+
+  (** Like {!fork_join3}, but runs the leftmost task in the current capsule. *)
+  val fork_join3
+    :  t @ local
+    -> (t @ local -> 'a) @ local once
+    -> (t @ local -> 'b) @ once portable
+    -> (t @ local -> 'c) @ once portable
+    -> #('a * 'b * 'c)
+
+  (** Like {!fork_join4}, but runs the leftmost task in the current capsule. *)
+  val fork_join4
+    :  t @ local
+    -> (t @ local -> 'a) @ local once
+    -> (t @ local -> 'b) @ once portable
+    -> (t @ local -> 'c) @ once portable
+    -> (t @ local -> 'd) @ once portable
+    -> #('a * 'b * 'c * 'd)
+
+  (** Like {!fork_join5}, but runs the leftmost task in the current capsule. *)
+  val fork_join5
+    :  t @ local
+    -> (t @ local -> 'a) @ local once
+    -> (t @ local -> 'b) @ once portable
+    -> (t @ local -> 'c) @ once portable
+    -> (t @ local -> 'd) @ once portable
+    -> (t @ local -> 'e) @ once portable
+    -> #('a * 'b * 'c * 'd * 'e)
+end
 
 (** [for_ t ~start ~stop ~f] runs [f t i] as a parallel task for each [i] in the range
     [start..stop-1].
@@ -70,7 +112,7 @@ val for_
   :  t @ local
   -> start:int
   -> stop:int
-  -> f:(t @ local -> int -> unit) @ portable
+  -> f:(t @ local -> int -> unit) @ shareable
   -> unit
 
 (** [fold t ~init ~state ~next ~stop ~fork ~join] folds an accumulator over a sequence of
@@ -87,16 +129,18 @@ val for_
 
     The operation implemented by the callbacks must be associative, and [init] must return
     a neutral element. If this is not the case, results will be non-deterministic. *)
-val fold
-  : ('acc : value mod portable) ('seq : value mod contended portable) 'ret.
+val%template fold
+  : ('acc : acc) ('seq : seq mod shareable shared).
   t @ local
   -> init:(unit -> 'acc) @ portable
   -> state:'seq
-  -> next:(t @ local -> 'acc -> 'seq -> ('acc, 'seq) Pair_or_null.t) @ portable
-  -> stop:(t @ local -> 'acc -> 'ret) @ portable
-  -> fork:(t @ local -> 'seq -> ('seq, 'seq) Pair_or_null.t) @ portable
-  -> join:(t @ local -> 'ret -> 'ret -> 'ret) @ portable
+  -> next:(t @ local -> 'acc -> 'seq -> (#('acc * 'seq) Option_u.t[@kind acc & seq]))
+     @ shareable
+  -> stop:(t @ local -> 'acc -> 'ret) @ shareable
+  -> fork:(t @ local -> 'seq -> (#('seq * 'seq) Option_u.t[@kind seq & seq])) @ shareable
+  -> join:(t @ local -> 'ret -> 'ret -> 'ret) @ shareable
   -> 'ret
+[@@kind acc = base_or_null, seq = (base_or_null, value_or_null & value_or_null)]
 
 module Scheduler : sig
   module type S = Parallel_scheduler_intf.S with type parallel := t
@@ -113,8 +157,6 @@ end
 
 module For_scheduler : sig
   module Result = Result
-
-  exception Out_of_fibers
 
   (** [root_exn f ~promote ~wake] creates a top-level, schedulable task representing the
       full execution of [f]. The functions [f], [promote], and [wake] must not raise
@@ -133,6 +175,9 @@ module For_scheduler : sig
     :  unit Thunk.t @ once portable
     -> promote:((unit -> unit) @ once portable -> unit) @ portable
     -> wake:(n:int -> unit) @ portable
+    -> lazy_:bool
+         (** Whether the fiber should be lazily allocated by its executor. If the executor
+             is unable to allocate a fiber, it will raise an exception to top level. *)
     -> (unit -> unit) @ once portable
 
   (** [await t trigger] suspends the current task until [trigger] is signaled, at which

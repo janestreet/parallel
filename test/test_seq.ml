@@ -227,7 +227,7 @@ module Test_scheduler (Scheduler : Parallel.Scheduler.S) = struct
                      (Iarray.init i ~f:Fn.id)
                      (Iarray.init j ~f:Fn.id)
                  in
-                 assert (Iarray.equal [%equal: int * int] res ref)))
+                 [%test_eq: (int * int) iarray] res ref))
       in
       check 10 100;
       check 100 10;
@@ -250,11 +250,15 @@ module Test_scheduler (Scheduler : Parallel.Scheduler.S) = struct
           Seq.unfold
             ~init:((0, 10) : int * int)
             ~next:(fun _ (l, r) ->
-              if l < r then Pair_or_null.some l (l + 1, r) else Pair_or_null.none ())
+              if l < r
+              then (Option_u.some [@kind value_or_null & value_or_null]) #(l, (l + 1, r))
+              else (Option_u.none [@kind value_or_null & value_or_null]) ())
             ~split:(fun _ (l, r) ->
               if l < r - 1
-              then Pair_or_null.some (l, l + 1) (l + 1, r)
-              else Pair_or_null.none ())
+              then
+                (Option_u.some [@kind value_or_null & value_or_null])
+                  #((l, l + 1), (l + 1, r))
+              else (Option_u.none [@kind value_or_null & value_or_null]) ())
         in
         collect parallel seq [@nontail]);
       [%expect
@@ -363,7 +367,7 @@ module Test_scheduler (Scheduler : Parallel.Scheduler.S) = struct
                      (Iarray.init i ~f:Fn.id)
                      (Iarray.init j ~f:Fn.id)
                  in
-                 assert (Iarray.equal [%equal: int * int] res ref)))
+                 [%test_eq: (int * int) iarray] res ref))
       in
       check 5 25;
       check 25 5;
@@ -390,7 +394,7 @@ module Test_scheduler (Scheduler : Parallel.Scheduler.S) = struct
                    Iarray.concat_map (Iarray.init i ~f:Fn.id) ~f:(fun _ ->
                      Iarray.init j ~f:(fun j -> i * j))
                  in
-                 assert (Iarray.equal (fun a b -> a = b) res ref)))
+                 [%test_eq: int iarray] res ref))
       in
       check 10 100;
       check 100 10;
@@ -414,11 +418,15 @@ module Test_scheduler (Scheduler : Parallel.Scheduler.S) = struct
             ~init:((0, 10) : int * int)
             ~length:(fun (l, r) -> r - l)
             ~next:(fun _ (l, r) ->
-              if l < r then Pair_or_null.some l (l + 1, r) else Pair_or_null.none ())
+              if l < r
+              then (Option_u.some [@kind value_or_null & value_or_null]) #(l, (l + 1, r))
+              else (Option_u.none [@kind value_or_null & value_or_null]) ())
             ~split_at:(fun _ (l, r) ~n ->
               if l < r - 1
-              then Pair_or_null.some (l, l + n) (l + n, r)
-              else Pair_or_null.none ())
+              then
+                (Option_u.some [@kind value_or_null & value_or_null])
+                  #((l, l + n), (l + n, r))
+              else (Option_u.none [@kind value_or_null & value_or_null]) ())
         in
         printf "%d\n" (Seq.length seq);
         collect parallel (Sequence.of_with_length seq) [@nontail]);

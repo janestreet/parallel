@@ -62,7 +62,7 @@ module type S = sig @@ portable
   val iter
     :  Parallel_kernel.t @ local
     -> 'a t @ local
-    -> f:(Parallel_kernel.t @ local -> 'a -> unit) @ portable
+    -> f:(Parallel_kernel.t @ local -> 'a -> unit) @ shareable
     -> unit
 
   (** [fold parallel seq ~f ~init ~combine] folds [combine] over [map seq ~f] in parallel.
@@ -70,12 +70,11 @@ module type S = sig @@ portable
       and [init ()] must be a neutral element. The order in which [f] and [combine] are
       applied is unspecified and potentially non-deterministic. *)
   val fold
-    : ('acc : value mod portable).
-    Parallel_kernel.t @ local
+    :  Parallel_kernel.t @ local
     -> 'a t @ local
     -> init:(unit -> 'acc) @ portable
-    -> f:(Parallel_kernel.t @ local -> 'acc -> 'a -> 'acc) @ portable
-    -> combine:(Parallel_kernel.t @ local -> 'acc -> 'acc -> 'acc) @ portable
+    -> f:(Parallel_kernel.t @ local -> 'acc -> 'a -> 'acc) @ shareable
+    -> combine:(Parallel_kernel.t @ local -> 'acc -> 'acc -> 'acc) @ shareable
     -> 'acc
 
   (** [reduce parallel seq ~f] reduces [seq] using [f] in parallel. [f] must be
@@ -84,7 +83,7 @@ module type S = sig @@ portable
   val reduce
     :  Parallel_kernel.t @ local
     -> 'a t @ local
-    -> f:(Parallel_kernel.t @ local -> 'a -> 'a -> 'a) @ portable
+    -> f:(Parallel_kernel.t @ local -> 'a -> 'a -> 'a) @ shareable
     -> 'a option
 
   (** [find parallel seq ~f] returns the first element of [seq] for which [f] returns
@@ -93,7 +92,7 @@ module type S = sig @@ portable
   val find
     :  Parallel_kernel.t @ local
     -> 'a t @ local
-    -> f:(Parallel_kernel.t @ local -> 'a -> bool) @ portable
+    -> f:(Parallel_kernel.t @ local -> 'a -> bool) @ shareable
     -> 'a option
 
   (** [to_list seq] collects a sequence into a list by evaluating each element in
@@ -123,8 +122,16 @@ module type Parallel_sequence = sig @@ portable
   val unfold
     : ('s : value mod contended portable).
     init:'s
-    -> next:(Parallel_kernel.t @ local -> 's -> ('a, 's) Pair_or_null.t) @ portable
-    -> split:(Parallel_kernel.t @ local -> 's -> ('s, 's) Pair_or_null.t) @ portable
+    -> next:
+         (Parallel_kernel.t @ local
+          -> 's
+          -> (#('a * 's) Option_u.t[@kind value_or_null & value_or_null]))
+       @ portable
+    -> split:
+         (Parallel_kernel.t @ local
+          -> 's
+          -> (#('s * 's) Option_u.t[@kind value_or_null & value_or_null]))
+       @ portable
     -> 'a t @ local
 
   (** [concat seqs] creates a sequence representing the concatenation of all sequences in
@@ -171,8 +178,16 @@ module type Parallel_sequence = sig @@ portable
     val unfold
       : ('s : value mod contended portable).
       init:'s
-      -> next:(Parallel_kernel.t @ local -> 's -> ('a, 's) Pair_or_null.t) @ portable
-      -> split_at:(Parallel_kernel.t @ local -> 's -> n:int -> ('s, 's) Pair_or_null.t)
+      -> next:
+           (Parallel_kernel.t @ local
+            -> 's
+            -> (#('a * 's) Option_u.t[@kind value_or_null & value_or_null]))
+         @ portable
+      -> split_at:
+           (Parallel_kernel.t @ local
+            -> 's
+            -> n:int
+            -> (#('s * 's) Option_u.t[@kind value_or_null & value_or_null]))
          @ portable
       -> length:('s -> int) @ portable
       -> 'a t @ local
@@ -195,7 +210,7 @@ module type Parallel_sequence = sig @@ portable
     val iteri
       :  Parallel_kernel.t @ local
       -> 'a t @ local
-      -> f:(Parallel_kernel.t @ local -> int -> 'a -> unit) @ portable
+      -> f:(Parallel_kernel.t @ local -> int -> 'a -> unit) @ shareable
       -> unit
 
     (** [foldi parallel seq ~f ~init ~combine] folds [combine] over [mapi seq ~f] in
@@ -203,12 +218,11 @@ module type Parallel_sequence = sig @@ portable
         associative and [init] must be a neutral element. The order in which [f] and
         [combine] are applied is unspecified and potentially non-deterministic. *)
     val foldi
-      : ('acc : value mod portable).
-      Parallel_kernel.t @ local
+      :  Parallel_kernel.t @ local
       -> 'a t @ local
       -> init:(unit -> 'acc) @ portable
-      -> f:(Parallel_kernel.t @ local -> int -> 'acc -> 'a -> 'acc) @ portable
-      -> combine:(Parallel_kernel.t @ local -> 'acc -> 'acc -> 'acc) @ portable
+      -> f:(Parallel_kernel.t @ local -> int -> 'acc -> 'a -> 'acc) @ shareable
+      -> combine:(Parallel_kernel.t @ local -> 'acc -> 'acc -> 'acc) @ shareable
       -> 'acc
 
     (** [findi parallel seq ~f] returns the first element of [seq], along with its index
@@ -218,7 +232,7 @@ module type Parallel_sequence = sig @@ portable
     val findi
       :  Parallel_kernel.t @ local
       -> 'a t @ local
-      -> f:(Parallel_kernel.t @ local -> int -> 'a -> bool) @ portable
+      -> f:(Parallel_kernel.t @ local -> int -> 'a -> bool) @ shareable
       -> (int * 'a) option
   end
 

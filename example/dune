@@ -1,6 +1,0 @@
-(library
- (name parallel_example)
- (public_name parallel.example)
- (libraries await await.blocking base parallel parallel_scheduler stdio)
- (preprocess
-  (pps ppx_jane)))

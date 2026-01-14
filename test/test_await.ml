@@ -44,7 +44,7 @@ module Index = struct
   type t = int * int [@@deriving sexp, compare, hash]
 end
 
-let with_await parallel ~f =
+let with_await parallel ~f = exclave_
   Await.with_
     parallel
     ~terminator:Terminator.never

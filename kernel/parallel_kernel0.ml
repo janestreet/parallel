@@ -18,11 +18,11 @@ and Ops : sig @@ portable
 end =
   Ops
 
-and Wait : (Effect.S with type ('a, _) ops := 'a Ops.t) = Effect.Make (Ops)
+and Wait : (Handled_effect.S with type ('a, _) ops := 'a Ops.t) = Handled_effect.Make (Ops)
 
 and Promise : sig @@ portable
   type 'a continuation =
-    ('a portable, (unit, unit) Wait.Contended.Result.t, unit) Effect.Continuation.t
+    ('a, (unit, unit) Wait.Contended.Result.t, unit) Handled_effect.Continuation.t
 
   type 'a state =
     | Start
@@ -39,7 +39,7 @@ end =
   Promise
 
 and Runqueue : sig @@ portable
-  type _ node : value mod portable =
+  type _ node =
     | Cons1 :
         { mutable promise : 'a Promise.t or_null
         ; job : 'a Job.t @@ global portable
@@ -52,7 +52,6 @@ and Runqueue : sig @@ portable
         ; more : ('b * 'l) node
         }
         -> ('a * ('b * 'l)) node
-  [@@unsafe_allow_any_mode_crossing]
 
   and nodes = Q : _ node Stack_pointer.t -> nodes [@@unboxed]
 
@@ -73,12 +72,12 @@ end =
   Scheduler
 
 and Parallel : sig @@ portable
-  type%fuelproof t : value mod contended portable =
+  type t =
     | Sequential
     | Parallel :
         { password : 'k Capsule.Password.t @@ many
         ; queue : (Runqueue.t, 'k) Capsule.Data.t
-        ; handler : Wait.t Effect.Handler.t @@ contended portable
+        ; handler : Wait.t Handled_effect.Handler.t @@ contended portable
         ; scheduler : Scheduler.t @@ global many
         }
         -> t

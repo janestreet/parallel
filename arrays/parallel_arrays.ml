@@ -9,7 +9,7 @@ type ('a, 'b) f = Parallel_kernel.t @ local -> int -> 'a -> 'b
 
 let[@inline] wrap
   : ('a : value mod portable) ('b : value mod portable).
-  f:(Parallel_kernel.t @ local -> 'a -> 'b) @ portable -> ('a, 'b) f @ portable
+  f:(Parallel_kernel.t @ local -> 'a -> 'b) @ shareable -> ('a, 'b) f @ shareable
   =
   fun ~f parallel _ a -> f parallel a
 ;;
@@ -733,61 +733,90 @@ struct
   let[@inline] iter parallel input ~f = iteri parallel ~f:(wrap ~f) input [@nontail]]
 
   let foldi_gen parallel input ~init ~f ~combine ~i ~j =
-    Parallel_kernel.fold
+    (Parallel_kernel.fold [@kind value_or_null (value_or_null & value_or_null)])
       parallel
       ~init
-      ~state:((~i, ~j) : i:int * j:int)
-      ~next:(fun parallel acc (~i, ~j) ->
+      ~state:(#(~i, ~j) : #(i:int * j:int))
+      ~next:(fun parallel acc #(~i, ~j) ->
         if i = j
-        then Pair_or_null.none ()
+        then
+          (Option_u.none
+          [@kind (_ : (_ : value_or_null & (value_or_null & value_or_null)))])
+            ()
         else (
           let a = Array.unsafe_racy_get_contended input i |> Obj.magic_uncontended in
-          Pair_or_null.some (f parallel i acc a) (~i:(i + 1), ~j)))
+          (Option_u.some
+          [@kind (_ : (_ : value_or_null & (value_or_null & value_or_null)))])
+            #(f parallel i acc a, #(~i:(i + 1), ~j))))
       ~stop:(fun _ acc -> acc)
-      ~fork:(fun _ (~i, ~j) ->
+      ~fork:(fun _ #(~i, ~j) ->
         let n = j - i in
         if n <= 1
-        then Pair_or_null.none ()
+        then
+          (Option_u.none
+          [@kind
+            (_ : (_ : (value_or_null & value_or_null) & (value_or_null & value_or_null)))])
+            ()
         else (
           let pivot = i + (n / 2) in
-          Pair_or_null.some (~i, ~j:pivot) (~i:pivot, ~j)))
+          (Option_u.some
+          [@kind
+            (_ : (_ : (value_or_null & value_or_null) & (value_or_null & value_or_null)))])
+            #(#(~i, ~j:pivot), #(~i:pivot, ~j))))
       ~join:combine [@nontail]
   ;;
-
-  [%%template
-  [@@@mode.default m = (uncontended, shared)]
 
   let[@inline] foldi parallel input ~init ~f ~combine =
     foldi_gen parallel input ~init ~f ~combine ~i:0 ~j:(Array.length input)
   ;;
 
   let[@inline] fold parallel input ~init ~f ~combine =
-    (foldi [@mode m])
+    foldi
       parallel
       input
       ~init
       ~f:(fun parallel _ acc a -> f parallel acc a)
       ~combine [@nontail]
-  ;;]
-
-  let[@inline] reduce parallel (input : 'a Array.t) ~f =
-    foldi
-      parallel
-      input
-      ~init:(fun () : 'a option -> None)
-      ~f:(fun parallel _ acc a ->
-        match acc with
-        | Some acc -> Some (f parallel acc a)
-        | None -> Some a)
-      ~combine:(fun parallel a b ->
-        Option.merge ~f:(fun a b -> f parallel a b) a b [@nontail])
   ;;
 
   [%%template
   [@@@mode.default m = (uncontended, shared)]
 
+  let[@inline] reduce parallel input ~f =
+    foldi
+      parallel
+      input
+      ~init:(fun () : ('a modality[@mode m]) option -> None)
+      ~f:(fun parallel _ acc a ->
+        match acc with
+        | Some { modality = acc } -> Some { modality = f parallel acc a }
+        | None -> Some { modality = a })
+      ~combine:(fun parallel a b ->
+        Option.merge
+          ~f:(fun { modality = a } { modality = b } -> { modality = f parallel a b })
+          a
+          b [@nontail])
+    |> function
+    | Some ({ modality = a } : ('a modality[@mode m])) -> Some a
+    | None -> None
+  ;;
+
+  let[@inline] min_elt parallel t ~compare =
+    (reduce [@mode m]) parallel t ~f:(fun parallel a b ->
+      let is_leq = compare parallel a b <= 0 in
+      (Bool.select [@mode m]) is_leq a b)
+    [@nontail]
+  ;;
+
+  let[@inline] max_elt parallel t ~compare =
+    (reduce [@mode m]) parallel t ~f:(fun parallel a b ->
+      let is_geq = compare parallel a b >= 0 in
+      (Bool.select [@mode m]) is_geq a b)
+    [@nontail]
+  ;;
+
   let[@inline] findi parallel (t : 'a Array.t) ~f =
-    (foldi [@mode m])
+    foldi
       parallel
       t
       ~init:(fun () : 'a option -> None)
@@ -799,20 +828,6 @@ struct
   ;;
 
   let[@inline] find parallel t ~f = (findi [@mode m]) parallel t ~f:(wrap ~f) [@nontail]]
-
-  let[@inline] min_elt parallel t ~compare =
-    reduce parallel t ~f:(fun parallel a b ->
-      let is_leq = compare parallel a b <= 0 in
-      Bool.select is_leq a b)
-    [@nontail]
-  ;;
-
-  let[@inline] max_elt parallel t ~compare =
-    reduce parallel t ~f:(fun parallel a b ->
-      let is_geq = compare parallel a b >= 0 in
-      Bool.select is_geq a b)
-    [@nontail]
-  ;;
 end
 
 module Make_sort (Array : sig
@@ -831,13 +846,17 @@ module Make_sort (Array : sig
     val sort_inplace
       :  Parallel_kernel.t @ local
       -> 'a mut
-      -> compare:(Parallel_kernel.t @ local -> 'a @ local -> 'a @ local -> int) @ portable
+      -> compare:
+           (Parallel_kernel.t @ local -> 'a @ local shared -> 'a @ local shared -> int)
+         @ shareable
       -> unit
 
     val stable_sort_inplace
       :  Parallel_kernel.t @ local
       -> 'a mut
-      -> compare:(Parallel_kernel.t @ local -> 'a @ local -> 'a @ local -> int) @ portable
+      -> compare:
+           (Parallel_kernel.t @ local -> 'a @ local shared -> 'a @ local shared -> int)
+         @ shareable
       -> unit
   end) =
 struct
@@ -882,14 +901,14 @@ module Make_scan (Array : sig
       :  Parallel_kernel.t @ local
       -> 'a mut
       -> init:'a
-      -> f:(Parallel_kernel.t @ local -> 'a -> 'a -> 'a) @ portable
+      -> f:(Parallel_kernel.t @ local -> 'a @ shared -> 'a @ shared -> 'a) @ shareable
       -> 'a
 
     val scan_inclusive_inplace
       :  Parallel_kernel.t @ local
       -> 'a mut
       -> init:'a
-      -> f:(Parallel_kernel.t @ local -> 'a -> 'a -> 'a) @ portable
+      -> f:(Parallel_kernel.t @ local -> 'a @ shared -> 'a @ shared -> 'a) @ shareable
       -> unit
 
     [%%template:
@@ -947,7 +966,7 @@ module Bigstring0 = struct
     bigstring
   ;;
 
-  let create_like t ~len a = create (kind t, len) a
+  let[@inline] create_like t ~len a = create (kind t, len) a
 
   [%%template
   [@@@mode.default m = (uncontended, shared)]
@@ -964,10 +983,10 @@ module Bigstring0 = struct
     @@ portable
     = "%identity"
 
-  let freeze t = t]
+  let[@inline] freeze t = t]
 
-  let to_length (_, n) = n
-  let empty_like (kind, _) = empty kind
+  let[@inline] to_length (_, n) = n
+  let[@inline] empty_like (kind, _) = empty kind
 
   include functor Make_inplace
   include functor Make_init
@@ -1124,14 +1143,14 @@ module Make_filter_map (Array : sig
       : ('b : value_or_null mod portable separable).
       Parallel_kernel.t @ local
       -> 'a t @ m
-      -> f:(Parallel_kernel.t @ local -> int -> 'a @ m -> 'b) @ portable
+      -> f:(Parallel_kernel.t @ local -> int -> 'a @ m -> 'b) @ shareable
       -> 'b t
 
     val filter
       : ('a : value_or_null mod portable separable).
       Parallel_kernel.t @ local
       -> 'a t @ m
-      -> f:(Parallel_kernel.t @ local -> 'a @ m -> bool) @ portable
+      -> f:(Parallel_kernel.t @ local -> 'a @ m -> bool) @ shareable
       -> 'a t @ m]
   end) =
 struct
@@ -1268,8 +1287,8 @@ struct
       Array.unsafe_racy_set_contended array (start + i) a
     ;;
 
-    let insert t i f = set t i (f ())
-    let unsafe_insert t i f = unsafe_set t i (f ())
+    let[@inline] insert t i f = set t i (f ())
+    let[@inline] unsafe_insert t i f = unsafe_set t i (f ())
   end
 end
 
@@ -1428,17 +1447,13 @@ module Bigstring = struct
   [%%template
   [@@@mode.default m = (uncontended, shared)]
 
-  external wrap : 'a t @ m -> ('a modality[@mode m]) t @ m @@ portable = "%identity"
-  external unwrap : ('a modality[@mode m]) t @ m -> 'a t @ m @@ portable = "%identity"
-
-  let freeze t = t
   let get = get
   let unsafe_get = unsafe_get
   let[@inline] extract t i f = f (get t i)
   let[@inline] unsafe_extract t i f = f (unsafe_get t i)]
 
-  let insert t i f = set t i (f ())
-  let unsafe_insert t i f = unsafe_set t i (f ())
+  let[@inline] insert t i f = set t i (f ())
+  let[@inline] unsafe_insert t i f = unsafe_set t i (f ())
 
   include functor Make_slice
   include functor Make_reduce
@@ -1446,13 +1461,127 @@ module Bigstring = struct
   include functor Make_filter
 
   let%template of_slice (slice : 'a Slice.t) : 'a t @ m =
-    (sub_shared [@mode contended])
-      slice.array
-      ~pos:slice.start
-      ~len:(slice.stop - slice.start)
     (* An uncontended/shared slice indicates uncontended/shared access to the protected
        index range. *)
-    |> Obj.magic_uncontended
+    let t = Obj.magic_uncontended slice.array in
+    (sub_shared [@mode m]) t ~pos:slice.start ~len:(slice.stop - slice.start)
+  [@@mode m = (uncontended, shared)]
+  ;;
+end
+
+module Bigarray = struct
+  module Kind = struct
+    type ('a, 'k) t = ('a, 'k) Bigarray.kind =
+      | Float32 : (float, Bigarray.float32_elt) t
+      | Float64 : (float, Bigarray.float64_elt) t
+      | Int8_signed : (int, Bigarray.int8_signed_elt) t
+      | Int8_unsigned : (int, Bigarray.int8_unsigned_elt) t
+      | Int16_signed : (int, Bigarray.int16_signed_elt) t
+      | Int16_unsigned : (int, Bigarray.int16_unsigned_elt) t
+      | Int32 : (int32, Bigarray.int32_elt) t
+      | Int64 : (int64, Bigarray.int64_elt) t
+      | Int : (int, Bigarray.int_elt) t
+      | Nativeint : (nativeint, Bigarray.nativeint_elt) t
+      | Complex32 : (Stdlib.Complex.t, Bigarray.complex32_elt) t
+      | Complex64 : (Stdlib.Complex.t, Bigarray.complex64_elt) t
+      | Char : (char, Bigarray.int8_unsigned_elt) t
+      | Float16 : (float, Bigarray.float16_elt) t
+  end
+
+  module Layout = struct
+    type 'a t = 'a Bigarray.layout =
+      | C_layout : Bigarray.c_layout t
+      | Fortran_layout : Bigarray.fortran_layout t
+  end
+
+  module Spec = struct
+    type 'a t = T : ('a, _) Kind.t * _ Layout.t -> 'a t
+  end
+
+  module Array = struct
+    include Bigarray.Array1
+
+    external unsafe_racy_get_contended
+      :  (('a, 'b, 'c) t[@local_opt]) @ contended
+      -> int
+      -> ('a[@local_opt]) @ contended
+      @@ portable
+      = "%caml_ba_unsafe_ref_1"
+
+    external unsafe_racy_set_contended
+      :  (('a, 'b, 'c) t[@local_opt]) @ contended
+      -> int
+      -> ('a[@local_opt])
+      -> unit
+      @@ portable
+      = "%caml_ba_unsafe_set_1"
+  end
+
+  type 'a t = T : ('a, _, _) Array.t -> 'a t [@@unboxed]
+  type 'a mut = 'a t
+  type 'a init = 'a Spec.t * int
+
+  let[@inline] unsafe_racy_get_contended (T t) i = Array.unsafe_racy_get_contended t i
+  let[@inline] unsafe_racy_set_contended (T t) i a = Array.unsafe_racy_set_contended t i a
+
+  let create (Spec.T (kind, layout), n) a =
+    let t = T (Array.create kind layout n) in
+    unsafe_racy_set_contended t 0 a;
+    t
+  ;;
+
+  let[@inline] create_like (T t) ~len a = create (T (Array.kind t, Array.layout t), len) a
+  let[@inline] empty_like (Spec.T (kind, layout), _) = T (Array.create kind layout 0)
+  let[@inline] to_length (_, n) = n
+  let[@inline] kind kind layout = Spec.T (kind, layout)
+  let[@inline] length (T t) = Array.dim t
+
+  [%%template
+  [@@@mode.default m = (uncontended, shared)]
+
+  let copy (T src) =
+    let dst = Array.create (Array.kind src) (Array.layout src) (Array.dim src) in
+    Array.blit src dst;
+    T dst
+  ;;
+
+  external wrap
+    :  'a t @ m portable
+    -> ('a modality[@mode m]) t @ m portable
+    @@ portable
+    = "%identity"
+
+  external unwrap
+    :  ('a modality[@mode m]) t @ m portable
+    -> 'a t @ m portable
+    @@ portable
+    = "%identity"
+
+  let[@inline] of_bigarray t = T t
+  let[@inline] freeze t = t
+  let[@inline] get (T t) i = Array.get t i
+  let[@inline] unsafe_get (T t) i = Array.unsafe_get t i
+  let[@inline] extract t i f = f (get t i)
+  let[@inline] unsafe_extract t i f = f (unsafe_get t i)]
+
+  let[@inline] set (T t) i a = Array.set t i a
+  let[@inline] unsafe_set (T t) i a = Array.unsafe_set t i a
+  let[@inline] insert t i f = set t i (f ())
+  let[@inline] unsafe_insert t i f = unsafe_set t i (f ())
+
+  include functor Make_inplace
+  include functor Make_init
+  include functor Make_scan
+  include functor Make_slice
+  include functor Make_reduce
+  include functor Make_sort
+  include functor Make_filter
+
+  let%template of_slice (slice : 'a Slice.t) : 'a t @ m =
+    (* An uncontended/shared slice indicates uncontended/shared access to the protected
+       index range. *)
+    let (T t) = Obj.magic_uncontended slice.array in
+    T (Array.sub t slice.start (slice.stop - slice.start))
   [@@mode m = (uncontended, shared)]
   ;;
 end

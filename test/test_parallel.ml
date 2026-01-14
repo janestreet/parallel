@@ -115,20 +115,36 @@ module Test_scheduler (Scheduler : Parallel.Scheduler.S) = struct
   let%expect_test "fold" =
     Scheduler.parallel scheduler ~f:(fun parallel ->
       let fold_n n =
-        Parallel.fold
+        (Parallel.fold [@kind value_or_null (value_or_null & value_or_null)])
           parallel
           ~init:(fun () -> 0)
-          ~state:((~start:0, ~stop:n) : start:int * stop:int)
-          ~next:(fun _ acc (~start, ~stop) ->
+          ~state:(#(~start:0, ~stop:n) : #(start:int * stop:int))
+          ~next:(fun _ acc #(~start, ~stop) ->
             if start = stop
-            then Pair_or_null.none ()
-            else Pair_or_null.some (acc + 1) (~start:(start + 1), ~stop))
+            then
+              (Option_u.none
+              [@kind (_ : (_ : value_or_null & (value_or_null & value_or_null)))])
+                ()
+            else
+              (Option_u.some
+              [@kind (_ : (_ : value_or_null & (value_or_null & value_or_null)))])
+                #(acc + 1, #(~start:(start + 1), ~stop)))
           ~stop:(fun _ i -> i)
-          ~fork:(fun _ (~start, ~stop) ->
+          ~fork:(fun _ #(~start, ~stop) ->
             let pivot = start + ((stop - start) / 2) in
             if pivot <= start + 1
-            then Pair_or_null.none ()
-            else Pair_or_null.some (~start, ~stop:pivot) (~start:pivot, ~stop))
+            then
+              (Option_u.none
+              [@kind
+                (_
+                 : (_ : (value_or_null & value_or_null) & (value_or_null & value_or_null)))])
+                ()
+            else
+              (Option_u.some
+              [@kind
+                (_
+                 : (_ : (value_or_null & value_or_null) & (value_or_null & value_or_null)))])
+                #(#(~start, ~stop:pivot), #(~start:pivot, ~stop)))
           ~join:(fun _ a b -> a + b)
       in
       printf "%d\n" (fold_n 10);
@@ -154,22 +170,37 @@ module Test_scheduler (Scheduler : Parallel.Scheduler.S) = struct
     end in
     Scheduler.parallel scheduler ~f:(fun parallel ->
       let fold_n n =
-        Parallel.fold
+        (Parallel.fold [@kind value_or_null (value_or_null & value_or_null)])
           parallel
           ~init:(fun () : int Vec.t -> Vec.create ())
-          ~state:((~start:0, ~stop:n) : start:int * stop:int)
-          ~next:(fun _ acc (~start, ~stop) ->
+          ~state:(#(~start:0, ~stop:n) : #(start:int * stop:int))
+          ~next:(fun _ acc #(~start, ~stop) ->
             if start = stop
-            then Pair_or_null.none ()
+            then
+              (Option_u.none
+              [@kind (_ : (_ : value_or_null & (value_or_null & value_or_null)))])
+                ()
             else (
               Vec.push_back acc start;
-              Pair_or_null.some acc (~start:(start + 1), ~stop)))
+              (Option_u.some
+              [@kind (_ : (_ : value_or_null & (value_or_null & value_or_null)))])
+                #(acc, #(~start:(start + 1), ~stop))))
           ~stop:(fun _ vec -> Leaf vec)
-          ~fork:(fun _ (~start, ~stop) ->
+          ~fork:(fun _ #(~start, ~stop) ->
             let pivot = start + ((stop - start) / 2) in
             if pivot <= start + 1
-            then Pair_or_null.none ()
-            else Pair_or_null.some (~start, ~stop:pivot) (~start:pivot, ~stop))
+            then
+              (Option_u.none
+              [@kind
+                (_
+                 : (_ : (value_or_null & value_or_null) & (value_or_null & value_or_null)))])
+                ()
+            else
+              (Option_u.some
+              [@kind
+                (_
+                 : (_ : (value_or_null & value_or_null) & (value_or_null & value_or_null)))])
+                #(#(~start, ~stop:pivot), #(~start:pivot, ~stop)))
           ~join:(fun _ a b -> Node (a, b))
       in
       print_s [%message (collect (fold_n 10) : int list)];

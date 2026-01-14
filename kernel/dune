@@ -4,7 +4,7 @@
   (names stack_pointer_stubs parallel_stubs))
  (name parallel_kernel)
  (public_name parallel.kernel)
- (libraries await base concurrent oxcaml_effect unboxed.int64_u pair_or_null
-   portable unique)
+ (libraries await base concurrent handled_effect unboxed.int64_u
+   unboxed.nativeint_u portable unboxed_datatypes unique)
  (preprocess
-  (pps ppx_jane ppx_fuelproof)))
+  (pps ppx_jane)))

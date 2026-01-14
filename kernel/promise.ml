@@ -29,14 +29,11 @@ include Parallel_kernel0.Promise
   +-----------+------------+------------+--+-------------------------+
     v} *)
 
-type%fuelproof 'k suspension : value mod portable =
+type 'k suspension =
   | Done
-  | Trigger of
-      Await.Trigger.t @@ aliased global many
-      * (unit continuation, 'k) Capsule.Data.t @@ global
+  | Trigger of Await.Trigger.t @@ aliased many * (unit continuation, 'k) Capsule.Data.t
   | Promise :
-      'a t @@ aliased global many
-      * ('a Result.Capsule.t continuation, 'k) Capsule.Data.t @@ global
+      'a t @@ aliased many * ('a Result.Capsule.t continuation, 'k) Capsule.Data.t
       -> 'k suspension
 
 let[@inline] start () = Unique.Atomic.make Start
@@ -47,7 +44,7 @@ let[@inline] [@loop] rec continue
     -> scheduler:Parallel_kernel0.Scheduler.t
     -> key:k Capsule.Key.t @ unique
     -> cont:
-         ( (a portable, (unit, unit) Wait.Contended.Result.t, unit) Effect.Continuation.t
+         ( (a, (unit, unit) Wait.Contended.Result.t, unit) Handled_effect.Continuation.t
            , k )
            Capsule.Data.t
        @ unique
@@ -55,21 +52,18 @@ let[@inline] [@loop] rec continue
   =
   fun a ~scheduler ~key ~cont ->
   let #(result, key) =
-    Capsule.Key.access_local key ~f:(fun [@inline] access -> exclave_
+    Capsule.Key.access key ~f:(fun [@inline] access ->
       let cont = Capsule.Data.unwrap_unique ~access cont in
-      let res =
-        match Effect.continue cont { portable = a } [] with
-        | Value () -> Done
-        | Exception exn ->
-          (* Cannot have come from the job; indicates a scheduler bug *)
-          raise exn
-        | Operation (Promise t, cont) -> Promise (t, Capsule.Data.wrap_unique ~access cont)
-        | Operation (Trigger t, cont) -> Trigger (t, Capsule.Data.wrap_unique ~access cont)
-      in
-      { many = res })
+      match Handled_effect.continue cont a [] with
+      | Value () -> Done
+      | Exception exn ->
+        (* Cannot have come from the job; indicates a scheduler bug *)
+        raise exn
+      | Operation (Promise t, cont) -> Promise (t, Capsule.Data.wrap_unique ~access cont)
+      | Operation (Trigger t, cont) -> Trigger (t, Capsule.Data.wrap_unique ~access cont))
   in
   let key = Capsule.Key.globalize_unique key in
-  match result.many with
+  match result with
   | Done -> ()
   | Trigger (t, cont) ->
     let[@inline] continue () = continue () ~scheduler ~key ~cont in
@@ -153,21 +147,24 @@ let[@inline] create_fiber t job ~scheduler ~tokens ~key =
   let #({ many = cont }, key) =
     Capsule.Key.access key ~f:(fun [@inline] access ->
       let k =
-        (Wait.Contended.fiber [@alert "-experimental_runtime5"])
-          (fun handler { portable = () } -> apply t job ~scheduler ~tokens ~handler)
+        (Wait.Contended.fiber [@alert "-experimental_runtime5"]) (fun handler () ->
+          apply t job ~scheduler ~tokens ~handler)
       in
       { many = Capsule.Data.wrap_unique ~access k })
   in
   #(cont, key)
 ;;
 
-exception Out_of_fibers
-
-let fiber_exn t job ~scheduler ~tokens =
+let fiber_exn t job ~scheduler ~tokens ~lazy_ =
   let (P key) = Capsule.create () in
-  match create_fiber t job ~scheduler ~tokens ~key with
-  | #(cont, key) -> fun () -> continue () ~scheduler ~key ~cont
-  | exception Out_of_memory -> raise Out_of_fibers
+  if lazy_
+  then
+    fun () ->
+    let #(cont, key) = create_fiber t job ~scheduler ~tokens ~key in
+    continue () ~scheduler ~key ~cont
+  else (
+    let #(cont, key) = create_fiber t job ~scheduler ~tokens ~key in
+    fun () -> continue () ~scheduler ~key ~cont)
 ;;
 
 let try_fiber t job ~scheduler ~tokens () =
@@ -175,5 +172,5 @@ let try_fiber t job ~scheduler ~tokens () =
   (* If we fail to allocate a fiber, we drop the job without claiming the promise. *)
   match create_fiber t job ~scheduler ~tokens ~key with
   | #(cont, key) -> continue () ~scheduler ~key ~cont
-  | exception Out_of_memory -> ()
+  | exception Out_of_fibers -> ()
 ;;

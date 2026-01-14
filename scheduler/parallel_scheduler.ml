@@ -38,10 +38,8 @@ let stop t =
     for i = 1 to Work_deqs.length queues - 1 do
       Work_deqs.wake queues ~idx:i
     done;
-    Await_blocking.with_await Terminator.never ~f:(fun await ->
-      Countdown_latch.decr stopped;
-      Countdown_latch.await await stopped)
-    [@nontail]
+    Countdown_latch.decr stopped;
+    Countdown_latch.await (Await_blocking.await Terminator.never) stopped [@nontail]
 ;;
 
 let create ?max_domains () =
@@ -79,7 +77,17 @@ let create ?max_domains () =
 ;;
 
 let parallel t ~f =
+  let open struct
+    external require_forkable_shareable
+      :  ('a[@local_opt]) @ forkable once shareable
+      -> ('a[@local_opt]) @ forkable once portable
+      @@ portable
+      = "%identity"
+  end in
   if is_stopped t then failwith "The scheduler is already stopped";
+  (* SAFETY: this is sound because [f] is [forkable shareable], our caller is blocked
+     until [f] completes, and [f] does not escape its scope. *)
+  let f = require_forkable_shareable f in
   match t with
   | Single_domain { sequential; _ } -> Sequential.parallel sequential ~f
   | Multi_domain { queues; _ } ->
@@ -87,7 +95,7 @@ let parallel t ~f =
     let wake ~n = Work_deqs.try_wake queues ~n in
     let result = Mvar.create () in
     let root =
-      Scheduler.root_exn ~promote ~wake (fun parallel ->
+      Scheduler.root_exn ~promote ~wake ~lazy_:false (fun parallel ->
         let res = Result.try_with (fun () -> f parallel) in
         Mvar.put_exn result { many = Result.globalize res };
         Work_deqs.wake queues ~idx:0)
@@ -95,20 +103,19 @@ let parallel t ~f =
     Work_deqs.push queues root;
     Scheduler.with_heartbeat (fun () ->
       Work_deqs.work queues ~break:(fun () -> Mvar.is_full result) [@nontail]);
-    Await_blocking.with_await Terminator.never ~f:(fun await ->
-      Result.unwrap_ok_exn (Mvar.take await result).many)
-    [@nontail]
+    Result.unwrap_ok_exn
+      (Mvar.take (Await_blocking.await Terminator.never) result).many [@nontail]
 ;;
 
 module Spawn = struct
   type t =
     { create : Await.t @ local -> Parallel_kernel.t Concurrent.t @ local portable
       @@ global
-    ; spawn : 'r 'a. ('r, 'a, Parallel_kernel.t) Concurrent.spawn_fn @@ global
+    ; spawn : 'r 'a. ('r, 'a, Parallel_kernel.t) Concurrent.Scheduler.spawn_fn @@ global
     }
 
   let thread ~threads =
-    let spawn_thread r f ~threads =
+    let spawn_thread r f ~threads : _ Concurrent.spawn_result =
       Atomic.incr threads;
       match
         (* [create] is [nonportable], so we are on domain 0. *)
@@ -122,17 +129,17 @@ module Spawn = struct
               ~finally:(fun () -> Atomic.decr threads) [@nontail])
           r
       with
-      | Spawned -> Concurrent.Spawned
+      | Spawned -> Spawned
       | Failed (r, exn, bt) ->
         Atomic.decr threads;
         Failed (r, exn, bt)
     in
-    let rec spawn : type r a. (r, a, Parallel_kernel.t) Concurrent.spawn_fn =
-      fun scope ~f r ->
+    let rec spawn : type r a. (r, a, Parallel_kernel.t) Concurrent.Scheduler.spawn_fn =
+      fun scope #{ fn; affinity = _; name = _ } r ->
       let token = Scope.add scope in
       spawn_thread ~threads r (fun parallel r ->
         Scope.Token.use token ~f:(fun [@inline] terminator scope ->
-          with_concurrent terminator ~f:(fun [@inline] c -> f scope parallel c r)
+          with_concurrent terminator ~f:(fun [@inline] c -> fn scope parallel c r)
           [@nontail])
         [@nontail])
     and create await = exclave_
@@ -140,13 +147,14 @@ module Spawn = struct
         await
         ~scheduler:((Concurrent.Scheduler.create [@mode portable] [@alloc stack]) ~spawn)
     and with_concurrent terminator ~f =
-      Await_blocking.with_await terminator ~f:(fun await -> f (create await) [@nontail])
+      f
+        (create (Await_blocking.await (Terminator.Expert.globalize terminator)))
       [@nontail]
     in
     exclave_ { create; spawn }
   ;;
 
-  let fiber ~queues =
+  let fiber ~queues ~lazy_ =
     let spawn_fiber r f ~queues =
       let promote job = Work_deqs.push queues job in
       let wake ~n = Work_deqs.try_wake queues ~n in
@@ -156,23 +164,24 @@ module Spawn = struct
         let r = (Obj.magic_unique [@mode contended portable]) r in
         f parallel r
       in
-      match Scheduler.root_exn f ~promote ~wake with
+      match Scheduler.root_exn f ~promote ~wake ~lazy_ with
       | root ->
         Work_deqs.push queues root;
         Work_deqs.wake_one queues;
         Concurrent.Spawned
-      | exception (Scheduler.Out_of_fibers as exn) ->
+      | exception (Out_of_fibers as exn) ->
         (* SAFETY: see above *)
         let r = (Obj.magic_unique [@mode contended portable]) r in
         let bt = Backtrace.Exn.most_recent () in
         Concurrent.Failed (r, exn, bt)
     in
-    let rec spawn : type r a. (r, a, Parallel_kernel.t) Concurrent.spawn_fn =
-      fun scope ~f r ->
+    let rec spawn : type r a. (r, a, Parallel_kernel.t) Concurrent.Scheduler.spawn_fn =
+      fun scope #{ fn; affinity = _; name = _ } r ->
       let token = Scope.add scope in
       spawn_fiber ~queues r (fun parallel r ->
         Scope.Token.use token ~f:(fun [@inline] terminator scope ->
-          with_concurrent parallel terminator ~f:(fun [@inline] c -> f scope parallel c r)
+          with_concurrent parallel terminator ~f:(fun [@inline] c ->
+            fn scope parallel c r)
           [@nontail])
         [@nontail])
     and create await = exclave_
@@ -194,33 +203,49 @@ let concurrent t ~terminator ~f =
   match t with
   | Single_domain { threads; _ } ->
     let%tydi { create; _ } = Spawn.thread ~threads in
-    parallel t ~f:(fun _ ->
-      Await_blocking.with_await terminator ~f:(fun await -> f (create await) [@nontail]))
+    parallel t ~f:(fun _ -> f (create (Await_blocking.await terminator)) [@nontail])
   | Multi_domain { queues; _ } ->
-    let%tydi { create; _ } = Spawn.fiber ~queues in
+    let%tydi { create; _ } = Spawn.fiber ~queues ~lazy_:false in
     parallel t ~f:(fun parallel ->
-      Await.with_ parallel ~terminator ~yield:Null ~await:Scheduler.await ~f:(fun await ->
-        f (create await) [@nontail]))
+      (Await.with_
+         parallel
+         ~terminator
+         ~yield:Null
+         ~await:Scheduler.await
+         ~f:(fun await -> { aliased_many = { global = f (create await) } }))
+        .aliased_many
+        .global)
 ;;
 
 module Expert = struct
+  let lazy_ =
+    (* If set, running out of fibers will crash the program. *)
+    match Sys.getenv "PARALLEL_SCHEDULER_LAZY_ASYNC_FIBERS" with
+    | Some "true" -> true
+    | _ -> false
+  ;;
+
   let scheduler t =
     match t with
     | Single_domain { threads; _ } ->
       let%tydi { spawn; _ } = Spawn.thread ~threads in
-      Concurrent.Scheduler.create ~spawn:(fun scope ~f r ->
+      Concurrent.Scheduler.create ~spawn:(fun scope task r ->
         if is_stopped t then failwith "The scheduler is already stopped";
-        spawn scope ~f r)
+        spawn scope task r)
     | Multi_domain { queues; _ } ->
       (* Each task must request heartbeats since they do not have an outer scope. *)
-      let%tydi { spawn; _ } = Spawn.fiber ~queues in
-      Concurrent.Scheduler.create ~spawn:(fun scope ~f r ->
+      let%tydi { spawn; _ } = Spawn.fiber ~queues ~lazy_ in
+      Concurrent.Scheduler.create ~spawn:(fun scope #{ fn; affinity; name } r ->
         if is_stopped t then failwith "The scheduler is already stopped";
         spawn
           scope
-          ~f:(fun scope ctx concurrent r ->
-            Scheduler.with_heartbeat (fun () -> f scope ctx concurrent r [@nontail])
-            [@nontail])
+          #{ fn =
+               (fun scope ctx concurrent r ->
+                 Scheduler.with_heartbeat (fun () -> fn scope ctx concurrent r [@nontail])
+                 [@nontail])
+           ; affinity
+           ; name
+           }
           r)
   ;;
 end

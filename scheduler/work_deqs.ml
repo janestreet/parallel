@@ -33,13 +33,13 @@ end = struct
   let create = Portable_ws_deque.create
 end
 
-type 'k queue_inner =
-  { queue : Once_deq.t @@ contended
-  ; sleepy : bool Awaitable.t
-  ; mutex : 'k Mutex.t
-  }
-
-type queue : value mod contended portable = P : 'k queue_inner -> queue [@@unboxed]
+type queue =
+  | P :
+      { queue : Once_deq.t @@ contended
+      ; sleepy : bool Awaitable.t
+      ; mutex : 'k Mutex.t
+      }
+      -> queue
 
 type t =
   { queues : queue Iarray.t
@@ -99,17 +99,17 @@ let[@inline] wake_one t =
 ;;
 
 let[@inline] try_wake { queues; sleepers } ~n =
-  (* This is not atomic with respect to stealing and updating [sleepers] in [work],
-     so it may drop wakeups. Using this function to wake stealers means there could
-     be work in our queue yet all other domains go to sleep. However, we will try
-     again whenever we spawn an additional job, so we're serializing at most one
-     fork per failure. This makes the fast path a single [sleepers > 0] check.
+  (* This is not atomic with respect to stealing and updating [sleepers] in [work], so it
+     may drop wakeups. Using this function to wake stealers means there could be work in
+     our queue yet all other domains go to sleep. However, we will try again whenever we
+     spawn an additional job, so we're serializing at most one fork per failure. This
+     makes the fast path a single [sleepers > 0] check.
 
      Using a bitfield would let us get an index to wake by tzcnting sleepers, but it's not
      clear this would be better, since waking up a domain would require atomic-anding out
-     the set bit on the shared [sleepers] instead of exchanging a non-shared [sleepy]. The
-     [sleepers <> 0] case should already be vanishingly rare in real workloads, so it
-     probably doesn't matter either way. *)
+     the set bit on the shared [sleepers] instead of exchanging an exclusive [sleepy].
+     Either way, the [sleepers <> 0] case should be rare in real workloads, so it probably
+     doesn't matter that much. *)
   let s = Atomic.get sleepers in
   if s > 0
   then (
@@ -186,8 +186,10 @@ let work { queues; sleepers } ~break =
             match
               Mutex.release_temporarily spin mutex key ~f:(fun () ->
                 (* Now we can be descheduled. *)
-                Await_blocking.with_await Terminator.never ~f:(fun block ->
-                  Awaitable.await block sleepy ~until_phys_unequal_to:true))
+                Awaitable.await
+                  (Await_blocking.await Terminator.never)
+                  sleepy
+                  ~until_phys_unequal_to:true)
             with
             | #(Signaled, key) -> sleep key
             | #(Terminated, _) ->

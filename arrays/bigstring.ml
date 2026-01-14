@@ -4,6 +4,7 @@ module Bigstring = Base_bigstring
 
 module Kind = struct
   type 'a t =
+    | Char : char t
     | Int8 : int8 t
     | Int16 : int16 t
     | Int32 : int32 t
@@ -13,6 +14,7 @@ module Kind = struct
   [@@deriving sexp_of]
 
   let width (type a) : a t -> int = function
+    | Char -> 1
     | Int8 -> 1
     | Int16 -> 2
     | Int32 -> 4
@@ -61,6 +63,10 @@ let%template[@inline] copy { kind; data } =
 [@@mode m = (uncontended, shared)]
 ;;
 
+let[@inline] of_string ?pos ?len s =
+  { kind = Char; data = Bigstring.of_string ?pos ?len s }
+;;
+
 let[@inline] length { kind; data } = length data / Kind.width kind
 
 (* Bigstrings are usually allocated by [malloc], which provides 16-byte alignment.
@@ -72,6 +78,7 @@ let[@inline] length { kind; data } = length data / Kind.width kind
   let get (type a) { kind : a Kind.t; data } pos : a =
     let pos = pos * Kind.width kind in
     match kind with
+    | Char -> Bigstring.get data pos
     | Int8 -> (Bigstring.get_int8 [@inlined]) data ~pos |> Int8.of_int
     | Int16 -> (Bigstring.get_int16_le [@inlined]) data ~pos |> Int16.of_int
     | Int32 -> (Bigstring.get_int32_t_le [@inlined]) data ~pos
@@ -84,6 +91,7 @@ let[@inline] length { kind; data } = length data / Kind.width kind
 let set (type a) { kind : a Kind.t; data } pos (a : a) =
   let pos = pos * Kind.width kind in
   match kind with
+  | Char -> Bigstring.set data pos a
   | Int8 -> (Bigstring.set_int8_exn [@inlined]) data ~pos (Int8.to_int a)
   | Int16 -> (Bigstring.set_int16_le_exn [@inlined]) data ~pos (Int16.to_int a)
   | Int32 -> (Bigstring.set_int32_t_le [@inlined]) data ~pos a
@@ -96,6 +104,7 @@ let set (type a) { kind : a Kind.t; data } pos (a : a) =
 let unsafe_get (type a) { kind : a Kind.t; data } pos : a =
   let pos = pos * Kind.width kind in
   match kind with
+  | Char -> Bigstring.unsafe_get data pos
   | Int8 -> (Bigstring.unsafe_get_int8 [@inlined]) data ~pos |> Int8.of_int
   | Int16 -> (Bigstring.unsafe_get_int16_le [@inlined]) data ~pos |> Int16.of_int
   | Int32 -> (Bigstring.unsafe_get_int32_t_le [@inlined]) data ~pos
@@ -109,6 +118,7 @@ let unsafe_get (type a) { kind : a Kind.t; data } pos : a =
 let unsafe_set (type a) { kind : a Kind.t; data } pos (a : a) =
   let pos = pos * Kind.width kind in
   match kind with
+  | Char -> Bigstring.unsafe_set data pos a
   | Int8 -> (Bigstring.unsafe_set_int8 [@inlined]) data ~pos (Int8.to_int a)
   | Int16 -> (Bigstring.unsafe_set_int16_le [@inlined]) data ~pos (Int16.to_int a)
   | Int32 -> (Bigstring.unsafe_set_int32_t_le [@inlined]) data ~pos a

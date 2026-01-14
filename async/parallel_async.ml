@@ -38,9 +38,12 @@ let create
 
 let spawn (T { scheduler; scope }) ~f =
   let portable_ivar = Ivar.create () in
-  Concurrent.Scheduler.spawn scheduler scope ~f:(fun scope parallel concurrent ->
-    let result = f scope parallel concurrent in
-    Ivar.fill_if_empty portable_ivar { portended = result });
+  Concurrent.Scheduler.spawn
+    scheduler
+    scope
+    (Concurrent.task (fun scope parallel concurrent ->
+       let result = f scope parallel concurrent in
+       Ivar.fill_if_empty portable_ivar { portended = result }));
   Ivar.read portable_ivar
   |> Async_kernel.Deferred.map ~f:(fun { portended } -> Modes.Contended.cross portended)
 ;;

@@ -1,7 +1,0 @@
-(executables
- (modes byte exe)
- (names filter)
- (libraries await await.blocking core_unix.command_unix core parallel
-   parallel_scheduler portable core_unix.time_stamp_counter)
- (preprocess
-  (pps ppx_jane)))

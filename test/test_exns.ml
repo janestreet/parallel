@@ -287,7 +287,7 @@ let%expect_test "concurrent parallel task terminated" =
     Concurrent.with_scope concurrent () ~f:(fun spawn ->
       Concurrent.spawn spawn ~f:(fun _scope parallel concurrent ->
         let #((), ()) =
-          Parallel.fork_join2
+          Parallel.Biased.fork_join2
             parallel
             (fun _ -> Await.Ivar.read (Concurrent.await concurrent) wait [@nontail])
             (fun _ -> ())
@@ -305,11 +305,16 @@ let%expect_test "concurrent scheduler terminated" =
         printf "Uncaught exn: %s\n" (Exn.to_string exn)))
   in
   run_concurrent_scheduler ~f:(fun scheduler ->
-    Concurrent.Scheduler.spawn scheduler scope ~f:(fun _scope _parallel concurrent ->
-      Await.Ivar.read (Concurrent.await concurrent) wait;
-      failwith "unreachable");
-    Concurrent.Scheduler.spawn scheduler scope ~f:(fun _scope _parallel _concurrent ->
-      failwith "fail"));
+    Concurrent.Scheduler.spawn
+      scheduler
+      scope
+      (Concurrent.task (fun _scope _parallel concurrent ->
+         Await.Ivar.read (Concurrent.await concurrent) wait;
+         failwith "unreachable"));
+    Concurrent.Scheduler.spawn
+      scheduler
+      scope
+      (Concurrent.task (fun _scope _parallel _concurrent -> failwith "fail")));
   [%expect {| Uncaught exn: (Failure fail) |}]
 ;;
 
@@ -350,7 +355,7 @@ let%expect_test "concurrent parallel nested" =
     Concurrent.with_scope concurrent () ~f:(fun spawn ->
       Concurrent.spawn spawn ~f:(fun _scope parallel concurrent ->
         let #((), ()) =
-          Parallel.fork_join2
+          Parallel.Biased.fork_join2
             parallel
             (fun _ ->
               Concurrent.with_scope concurrent () ~f:(fun spawn ->
@@ -373,7 +378,7 @@ let%expect_test "concurrent parallel into_scope" =
     Concurrent.with_scope concurrent () ~f:(fun spawn ->
       Concurrent.spawn spawn ~f:(fun scope parallel concurrent ->
         let #((), ()) =
-          Parallel.fork_join2
+          Parallel.Biased.fork_join2
             parallel
             (fun _ ->
               let spawn = Concurrent.into_scope concurrent scope in
@@ -393,8 +398,10 @@ let%expect_test "concurrent scheduler" =
         printf "Uncaught exn: %s\n" (Exn.to_string exn)))
   in
   run_concurrent_scheduler ~f:(fun scheduler ->
-    Concurrent.Scheduler.spawn scheduler scope ~f:(fun _scope _parallel _concurrent ->
-      failwith "fail"));
+    Concurrent.Scheduler.spawn
+      scheduler
+      scope
+      (Concurrent.task (fun _scope _parallel _concurrent -> failwith "fail")));
   [%expect {| Uncaught exn: (Failure fail) |}]
 ;;
 
@@ -405,11 +412,17 @@ let%expect_test "concurrent scheduler parallel" =
         printf "Uncaught exn: %s\n" (Exn.to_string exn)))
   in
   run_concurrent_scheduler ~f:(fun scheduler ->
-    Concurrent.Scheduler.spawn scheduler scope ~f:(fun _scope parallel _concurrent ->
-      let #((), ()) =
-        Parallel.fork_join2 parallel (fun _ -> failwith "fail") (fun _ -> failwith "fail")
-      in
-      ()));
+    Concurrent.Scheduler.spawn
+      scheduler
+      scope
+      (Concurrent.task (fun _scope parallel _concurrent ->
+         let #((), ()) =
+           Parallel.fork_join2
+             parallel
+             (fun _ -> failwith "fail")
+             (fun _ -> failwith "fail")
+         in
+         ())));
   (* inner panics are reported to the monitor *)
   [%expect {| Uncaught exn: (Failure fail) |}]
 ;;

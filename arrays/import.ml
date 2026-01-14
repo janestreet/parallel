@@ -1,6 +1,7 @@
 open! Base
 module Int8 = Stdlib_stable.Int8
 module Int16 = Stdlib_stable.Int16
+module Option_u = Unboxed_datatypes.Option_u
 
 module Array : sig @@ portable
   include module type of Array

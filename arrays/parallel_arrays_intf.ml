@@ -65,7 +65,7 @@ module type Init = sig @@ portable
   val init
     :  Parallel_kernel.t @ local
     -> 'a init
-    -> f:(Parallel_kernel.t @ local -> int -> 'a) @ portable
+    -> f:(Parallel_kernel.t @ local -> int -> 'a) @ shareable
     -> 'a t
 end
 
@@ -79,76 +79,22 @@ module type Reduce = sig @@ portable
   val iter
     :  Parallel_kernel.t @ local
     -> 'a t @ m
-    -> f:(Parallel_kernel.t @ local -> 'a @ m -> unit) @ portable
+    -> f:(Parallel_kernel.t @ local -> 'a @ m -> unit) @ shareable
     -> unit
 
   (** [iteri parallel t ~f] applies [f] to each element of [t] and its index. *)
   val iteri
     :  Parallel_kernel.t @ local
     -> 'a t @ m
-    -> f:(Parallel_kernel.t @ local -> int -> 'a @ m -> unit) @ portable
+    -> f:(Parallel_kernel.t @ local -> int -> 'a @ m -> unit) @ shareable
     -> unit
-
-  (** [fold parallel t ~init ~f ~combine] folds [combine] over the result of
-      [map parallel t ~f]. [combine] must be associative and [combine init x] must equal
-      [x]. *)
-  val fold
-    : ('acc : value mod portable).
-    Parallel_kernel.t @ local
-    -> 'a t @ m
-    -> init:(unit -> 'acc) @ portable
-    -> f:(Parallel_kernel.t @ local -> 'acc -> 'a @ m -> 'acc) @ portable
-    -> combine:(Parallel_kernel.t @ local -> 'acc -> 'acc -> 'acc) @ portable
-    -> 'acc
-
-  (** [foldi parallel t ~init ~f ~combine] folds [combine] over the result of
-      [mapi parallel t ~f]. [combine] must be associative and [combine init x] must equal
-      [x]. *)
-  val foldi
-    : ('acc : value mod portable).
-    Parallel_kernel.t @ local
-    -> 'a t @ m
-    -> init:(unit -> 'acc) @ portable
-    -> f:(Parallel_kernel.t @ local -> int -> 'acc -> 'a @ m -> 'acc) @ portable
-    -> combine:(Parallel_kernel.t @ local -> 'acc -> 'acc -> 'acc) @ portable
-    -> 'acc]
-
-  (** [reduce parallel t ~f] folds [f] over the elements of [t]. [f] must be associative.
-      If [t] is empty, [reduce] returns [None]. *)
-  val reduce
-    : ('a : value mod contended portable).
-    Parallel_kernel.t @ local
-    -> 'a t @ shared
-    -> f:(Parallel_kernel.t @ local -> 'a -> 'a -> 'a) @ portable
-    -> 'a option
-
-  (** [min_elt parallel t ~compare] is the minimum element of [t] according to [compare].
-      If [t] is empty, returns [None]. *)
-  val min_elt
-    : ('a : value mod contended portable).
-    Parallel_kernel.t @ local
-    -> 'a t @ shared
-    -> compare:(Parallel_kernel.t @ local -> 'a -> 'a -> int) @ portable
-    -> 'a option
-
-  (** [max_elt parallel t ~compare] is the maximum element of [t] according to [compare].
-      If [t] is empty, returns [None]. *)
-  val max_elt
-    : ('a : value mod contended portable).
-    Parallel_kernel.t @ local
-    -> 'a t @ shared
-    -> compare:(Parallel_kernel.t @ local -> 'a -> 'a -> int) @ portable
-    -> 'a option
-
-  [%%template:
-  [@@@mode.default m = (uncontended, shared)]
 
   (** [find parallel t ~f] returns the first element of [t] for which [f] returns [true],
       if it exists. [f] will always be applied to every element of [t]. *)
   val find
     :  Parallel_kernel.t @ local
     -> 'a t @ m
-    -> f:(Parallel_kernel.t @ local -> 'a @ m -> bool) @ portable
+    -> f:(Parallel_kernel.t @ local -> 'a @ m -> bool) @ shareable
     -> 'a option @ m
 
   (** [findi parallel t ~f] returns the first element of [t] for which [f] returns [true],
@@ -156,8 +102,58 @@ module type Reduce = sig @@ portable
   val findi
     :  Parallel_kernel.t @ local
     -> 'a t @ m
-    -> f:(Parallel_kernel.t @ local -> int -> 'a @ m -> bool) @ portable
+    -> f:(Parallel_kernel.t @ local -> int -> 'a @ m -> bool) @ shareable
+    -> 'a option @ m
+
+  (** [reduce parallel t ~f] folds [f] over the elements of [t]. [f] must be associative.
+      If [t] is empty, [reduce] returns [None]. *)
+  val reduce
+    :  Parallel_kernel.t @ local
+    -> 'a t @ m
+    -> f:(Parallel_kernel.t @ local -> 'a @ shared -> 'a @ shared -> 'a @ m) @ shareable
+    -> 'a option @ m
+
+  (** [min_elt parallel t ~compare] is the minimum element of [t] according to [compare].
+      If [t] is empty, returns [None]. *)
+  val min_elt
+    :  Parallel_kernel.t @ local
+    -> 'a t @ m
+    -> compare:
+         (Parallel_kernel.t @ local -> 'a @ local shared -> 'a @ local shared -> int)
+       @ shareable
+    -> 'a option @ m
+
+  (** [max_elt parallel t ~compare] is the maximum element of [t] according to [compare].
+      If [t] is empty, returns [None]. *)
+  val max_elt
+    :  Parallel_kernel.t @ local
+    -> 'a t @ m
+    -> compare:
+         (Parallel_kernel.t @ local -> 'a @ local shared -> 'a @ local shared -> int)
+       @ shareable
     -> 'a option @ m]
+
+  (** [fold parallel t ~init ~f ~combine] folds [combine] over the result of
+      [map parallel t ~f]. [combine] must be associative and [combine init x] must equal
+      [x]. *)
+  val fold
+    :  Parallel_kernel.t @ local
+    -> 'a t @ shared
+    -> init:(unit -> 'acc) @ portable
+    -> f:(Parallel_kernel.t @ local -> 'acc -> 'a @ shared -> 'acc) @ shareable
+    -> combine:(Parallel_kernel.t @ local -> 'acc -> 'acc -> 'acc) @ shareable
+    -> 'acc
+
+  (** [foldi parallel t ~init ~f ~combine] folds [combine] over the result of
+      [mapi parallel t ~f]. [combine] must be associative and [combine init x] must equal
+      [x]. *)
+  val foldi
+    :  Parallel_kernel.t @ local
+    -> 'a t @ shared
+    -> init:(unit -> 'acc) @ portable
+    -> f:(Parallel_kernel.t @ local -> int -> 'acc -> 'a @ shared -> 'acc) @ shareable
+    -> combine:(Parallel_kernel.t @ local -> 'acc -> 'acc -> 'acc) @ shareable
+    -> 'acc
 end
 
 module type%template Map = sig @@ portable
@@ -174,7 +170,7 @@ module type%template Map = sig @@ portable
   val map
     :  Parallel_kernel.t @ local
     -> 'a t @ m
-    -> f:(Parallel_kernel.t @ local -> 'a @ m -> 'b) @ portable
+    -> f:(Parallel_kernel.t @ local -> 'a @ m -> 'b) @ shareable
     -> 'b t
 
   (** [mapi parallel t ~f] initializes an array with the result of [f] applied to each
@@ -182,7 +178,7 @@ module type%template Map = sig @@ portable
   val mapi
     :  Parallel_kernel.t @ local
     -> 'a t @ m
-    -> f:(Parallel_kernel.t @ local -> int -> 'a @ m -> 'b) @ portable
+    -> f:(Parallel_kernel.t @ local -> int -> 'a @ m -> 'b) @ shareable
     -> 'b t
 
   [@@@mode a = m]
@@ -195,7 +191,7 @@ module type%template Map = sig @@ portable
     :  Parallel_kernel.t @ local
     -> 'a t @ a
     -> 'b t @ b
-    -> f:(Parallel_kernel.t @ local -> 'a @ a -> 'b @ b -> 'c) @ portable
+    -> f:(Parallel_kernel.t @ local -> 'a @ a -> 'b @ b -> 'c) @ shareable
     -> 'c t
 
   (** [mapi2_exn parallel t0 t1 ~f] initializes an array with the result of [f] applied to
@@ -205,7 +201,7 @@ module type%template Map = sig @@ portable
     :  Parallel_kernel.t @ local
     -> 'a t @ a
     -> 'b t @ b
-    -> f:(Parallel_kernel.t @ local -> int -> 'a @ a -> 'b @ b -> 'c) @ portable
+    -> f:(Parallel_kernel.t @ local -> int -> 'a @ a -> 'b @ b -> 'c) @ shareable
     -> 'c t
 end
 
@@ -219,8 +215,9 @@ module type%template Sort = sig @@ portable
   val sort
     :  Parallel_kernel.t @ local
     -> 'a t @ m
-    -> compare:(Parallel_kernel.t @ local -> 'a @ local m -> 'a @ local m -> int)
-       @ portable
+    -> compare:
+         (Parallel_kernel.t @ local -> 'a @ local shared -> 'a @ local shared -> int)
+       @ shareable
     -> 'a t @ m
 
   (** [stable_sort parallel t ~compare] initializes an array with the contents of [t]
@@ -228,8 +225,9 @@ module type%template Sort = sig @@ portable
   val stable_sort
     :  Parallel_kernel.t @ local
     -> 'a t @ m
-    -> compare:(Parallel_kernel.t @ local -> 'a @ local m -> 'a @ local m -> int)
-       @ portable
+    -> compare:
+         (Parallel_kernel.t @ local -> 'a @ local shared -> 'a @ local shared -> int)
+       @ shareable
     -> 'a t @ m
 end
 
@@ -245,7 +243,7 @@ module type%template Scan = sig @@ portable
     :  Parallel_kernel.t @ local
     -> 'a t @ m
     -> init:'a @ m
-    -> f:(Parallel_kernel.t @ local -> 'a @ m -> 'a @ m -> 'a @ m) @ portable
+    -> f:(Parallel_kernel.t @ local -> 'a @ shared -> 'a @ shared -> 'a @ m) @ shareable
     -> 'a t * 'a @ m
 
   (** [scan_inclusive parallel t ~init ~f] initialises an array containing the inclusive
@@ -255,7 +253,7 @@ module type%template Scan = sig @@ portable
     :  Parallel_kernel.t @ local
     -> 'a t @ m
     -> init:'a @ m
-    -> f:(Parallel_kernel.t @ local -> 'a @ m -> 'a @ m -> 'a @ m) @ portable
+    -> f:(Parallel_kernel.t @ local -> 'a @ shared -> 'a @ shared -> 'a @ m) @ shareable
     -> 'a t @ m
 end
 
@@ -269,7 +267,7 @@ module type%template Filter = sig @@ portable
   val filter
     :  Parallel_kernel.t @ local
     -> 'a t @ m
-    -> f:(Parallel_kernel.t @ local -> 'a @ m -> bool) @ portable
+    -> f:(Parallel_kernel.t @ local -> 'a @ m -> bool) @ shareable
     -> 'a t @ m
 
   (** [filteri parallel t ~f] initialises an array containing the elements of [t] that,
@@ -277,7 +275,7 @@ module type%template Filter = sig @@ portable
   val filteri
     :  Parallel_kernel.t @ local
     -> 'a t @ m
-    -> f:(Parallel_kernel.t @ local -> int -> 'a @ m -> bool) @ portable
+    -> f:(Parallel_kernel.t @ local -> int -> 'a @ m -> bool) @ shareable
     -> 'a t @ m
 end
 
@@ -292,7 +290,7 @@ module type%template Filter_map = sig @@ portable
     : ('b : value mod non_float portable).
     Parallel_kernel.t @ local
     -> 'a t @ m
-    -> f:(Parallel_kernel.t @ local -> 'a @ m -> 'b or_null) @ portable
+    -> f:(Parallel_kernel.t @ local -> 'a @ m -> 'b or_null) @ shareable
     -> 'b t
 
   (** [filter_mapi parallel t ~f] initializes an array with the result of [f] applied to
@@ -301,7 +299,7 @@ module type%template Filter_map = sig @@ portable
     : ('b : value mod non_float portable).
     Parallel_kernel.t @ local
     -> 'a t @ m
-    -> f:(Parallel_kernel.t @ local -> int -> 'a @ m -> 'b or_null) @ portable
+    -> f:(Parallel_kernel.t @ local -> int -> 'a @ m -> 'b or_null) @ shareable
     -> 'b t
 end
 
@@ -313,7 +311,7 @@ module type Inplace = sig @@ portable
   val map_inplace
     :  Parallel_kernel.t @ local
     -> 'a t
-    -> f:(Parallel_kernel.t @ local -> 'a -> 'a) @ portable
+    -> f:(Parallel_kernel.t @ local -> 'a -> 'a) @ shareable
     -> unit
 
   (** [mapi_inplace parallel t ~f] overwrites an array with the result of [f] applied to
@@ -321,7 +319,7 @@ module type Inplace = sig @@ portable
   val mapi_inplace
     :  Parallel_kernel.t @ local
     -> 'a t
-    -> f:(Parallel_kernel.t @ local -> int -> 'a -> 'a) @ portable
+    -> f:(Parallel_kernel.t @ local -> int -> 'a -> 'a) @ shareable
     -> unit
 
   (** [init_inplace parallel t ~f] overwrites an array with the result of [f] applied to
@@ -330,14 +328,16 @@ module type Inplace = sig @@ portable
   val init_inplace
     :  Parallel_kernel.t @ local
     -> 'a t
-    -> f:(Parallel_kernel.t @ local -> int -> 'a) @ portable
+    -> f:(Parallel_kernel.t @ local -> int -> 'a) @ shareable
     -> unit
 
   (** [sort_inplace parallel t ~compare] unstably sorts [t] with respect to [compare]. *)
   val sort_inplace
     :  Parallel_kernel.t @ local
     -> 'a t
-    -> compare:(Parallel_kernel.t @ local -> 'a @ local -> 'a @ local -> int) @ portable
+    -> compare:
+         (Parallel_kernel.t @ local -> 'a @ local shared -> 'a @ local shared -> int)
+       @ shareable
     -> unit
 
   (** [stable_sort_inplace parallel t ~compare] stably sorts [t] with respect to
@@ -345,7 +345,9 @@ module type Inplace = sig @@ portable
   val stable_sort_inplace
     :  Parallel_kernel.t @ local
     -> 'a t
-    -> compare:(Parallel_kernel.t @ local -> 'a @ local -> 'a @ local -> int) @ portable
+    -> compare:
+         (Parallel_kernel.t @ local -> 'a @ local shared -> 'a @ local shared -> int)
+       @ shareable
     -> unit
 
   (** [scan_inplace parallel t ~init ~f] overwrites [t] to contain the its exclusive
@@ -355,7 +357,7 @@ module type Inplace = sig @@ portable
     :  Parallel_kernel.t @ local
     -> 'a t
     -> init:'a
-    -> f:(Parallel_kernel.t @ local -> 'a -> 'a -> 'a) @ portable
+    -> f:(Parallel_kernel.t @ local -> 'a @ shared -> 'a @ shared -> 'a) @ shareable
     -> 'a
 
   (** [scan_inclusive_inplace parallel t ~init ~f] overwrites [t] to contain its inclusive
@@ -365,7 +367,7 @@ module type Inplace = sig @@ portable
     :  Parallel_kernel.t @ local
     -> 'a t
     -> init:'a
-    -> f:(Parallel_kernel.t @ local -> 'a -> 'a -> 'a) @ portable
+    -> f:(Parallel_kernel.t @ local -> 'a @ shared -> 'a @ shared -> 'a) @ shareable
     -> unit
 end
 
@@ -420,8 +422,8 @@ module type%template Slice = sig @@ portable
     :  Parallel_kernel.t @ local
     -> ?pivot:int
     -> 'a t @ local m
-    -> (Parallel_kernel.t @ local -> 'a t @ local m -> 'b) @ once portable
-    -> (Parallel_kernel.t @ local -> 'a t @ local m -> 'c) @ once portable
+    -> (Parallel_kernel.t @ local -> 'a t @ local m -> 'b) @ forkable local once shareable
+    -> (Parallel_kernel.t @ local -> 'a t @ local m -> 'c) @ once shareable
     -> #('b * 'c)
 
   (** [for_ parallel ~pivots t ~f] splits the slice [t] into multiple sub-slices
@@ -432,7 +434,7 @@ module type%template Slice = sig @@ portable
     :  Parallel_kernel.t @ local
     -> pivots:int iarray
     -> 'a t @ local m
-    -> f:(Parallel_kernel.t @ local -> 'a t @ local m -> unit) @ portable
+    -> f:(Parallel_kernel.t @ local -> 'a t @ local m -> unit) @ shareable
     -> unit
 
   (** [fori parallel ~pivots t ~f] splits the slice [t] into multiple sub-slices
@@ -443,7 +445,7 @@ module type%template Slice = sig @@ portable
     :  Parallel_kernel.t @ local
     -> pivots:int iarray
     -> 'a t @ local m
-    -> f:(Parallel_kernel.t @ local -> int -> 'a t @ local m -> unit) @ portable
+    -> f:(Parallel_kernel.t @ local -> int -> 'a t @ local m -> unit) @ shareable
     -> unit
 end
 [@@kind k = (value mod portable, value mod contended portable)]
@@ -631,8 +633,77 @@ module type Parallel_arrays = sig @@ portable
     val%template of_slice : 'a Slice.t @ local m -> 'a t @ m
     [@@mode m = (uncontended, shared)]
 
+    (** [of_string s] is a new character bigstring initialized by copying the contents of
+        the string [s]. The optional arguments [pos] and [len] are forwarded to
+        {!Base_bigstring.of_string} *)
+    val of_string : ?pos:int -> ?len:int -> string -> char t
+
     (** @inline *)
-    include Init with type 'a t := 'a t and type 'a init := 'a Bigstring.Kind.t * int
+    include Init with type 'a t := 'a t and type 'a init := 'a Kind.t * int
+
+    include Reduce with type 'a t := 'a t (** @inline *)
+
+    include Sort with type 'a t := 'a t (** @inline *)
+
+    include Scan with type 'a t := 'a t (** @inline *)
+
+    include Filter with type 'a t := 'a t (** @inline *)
+
+    include Inplace with type 'a t := 'a t (** @inline *)
+  end
+
+  module Bigarray : sig
+    module Kind : sig
+      type ('a, 'k) t = ('a, 'k) Bigarray.kind =
+        | Float32 : (float, Bigarray.float32_elt) t
+        | Float64 : (float, Bigarray.float64_elt) t
+        | Int8_signed : (int, Bigarray.int8_signed_elt) t
+        | Int8_unsigned : (int, Bigarray.int8_unsigned_elt) t
+        | Int16_signed : (int, Bigarray.int16_signed_elt) t
+        | Int16_unsigned : (int, Bigarray.int16_unsigned_elt) t
+        | Int32 : (int32, Bigarray.int32_elt) t
+        | Int64 : (int64, Bigarray.int64_elt) t
+        | Int : (int, Bigarray.int_elt) t
+        | Nativeint : (nativeint, Bigarray.nativeint_elt) t
+        | Complex32 : (Stdlib.Complex.t, Bigarray.complex32_elt) t
+        | Complex64 : (Stdlib.Complex.t, Bigarray.complex64_elt) t
+        | Char : (char, Bigarray.int8_unsigned_elt) t
+        | Float16 : (float, Bigarray.float16_elt) t
+    end
+
+    module Layout : sig
+      type 'a t = 'a Bigarray.layout =
+        | C_layout : Bigarray.c_layout t
+        | Fortran_layout : Bigarray.fortran_layout t
+    end
+
+    module Spec : sig
+      type 'a t = T : ('a, _) Kind.t * _ Layout.t -> 'a t
+    end
+
+    type 'a t = T : ('a, _, _) Bigarray.Array1.t -> 'a t [@@unboxed]
+
+    (** Wraps a [Bigarray.Array1.t] as a parallel bigarray. *)
+    val%template of_bigarray : ('a, _, _) Bigarray.Array1.t @ m -> 'a t @ m
+    [@@mode m = (uncontended, shared)]
+
+    (** Wraps a [Bigarray.kind] and [Bigarray.layout] as a parallel bigarray spec. *)
+    val kind : ('a, _) Kind.t -> _ Layout.t -> 'a Spec.t
+
+    (** [length t] returns the number of elements in [t]. *)
+    val length : 'a t @ contended -> int
+
+    include Get with type 'a t := 'a t (** @inline *)
+
+    include Set with type 'a t := 'a t (** @inline *)
+
+    module Slice : Slice with type 'a array := 'a t
+
+    val%template of_slice : 'a Slice.t @ local m -> 'a t @ m
+    [@@mode m = (uncontended, shared)]
+
+    (** @inline *)
+    include Init with type 'a t := 'a t and type 'a init := 'a Spec.t * int
 
     include Reduce with type 'a t := 'a t (** @inline *)
 

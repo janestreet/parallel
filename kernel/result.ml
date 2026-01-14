@@ -1,8 +1,8 @@
 open! Base
 
 type 'a t =
-  | Ok of 'a @@ aliased global
-  | Exn of Exn.t @@ aliased global * Backtrace.t @@ aliased global
+  | Ok of 'a @@ global
+  | Exn of Exn.t @@ global * Backtrace.t @@ global
 
 let[@inline] try_with f = exclave_
   try Ok (f ()) with
@@ -28,24 +28,18 @@ let[@inline] globalize = function
 module Capsule = struct
   module Capsule = Portable.Capsule.Expert
 
-  type%fuelproof 'a t : value mod contended forkable many portable unyielding =
-    | Ok :
-        ('a, 'k) Capsule.Data.t @@ aliased forkable global many unyielding
-        * 'k Capsule.Key.t @@ global
-        -> 'a t
-    | Exn of
-        Exn.t @@ aliased forkable global many unyielding
-        * Backtrace.t @@ aliased global many
-  [@@allow_redundant_modalities]
+  type 'a t =
+    | Ok : ('a, 'k) Capsule.Data.t @@ global many * 'k Capsule.Key.t -> 'a t
+    | Exn of Exn.t @@ global many * Backtrace.t @@ global many
 
   let[@inline] try_with f = exclave_
     let (P key) = Capsule.create () in
     try
       let #(result, key) =
         Capsule.Key.access_local key ~f:(fun [@inline] access ->
-          { global = { aliased = { many = Capsule.Data.wrap ~access (f ()) } } })
+          { global = { many = Capsule.Data.wrap ~access (f ()) } })
       in
-      Ok (result.global.aliased.many, Capsule.Key.globalize_unique key)
+      Ok (result.global.many, key)
     with
     | exn -> Exn (exn, Backtrace.Exn.most_recent ())
   ;;
@@ -55,8 +49,8 @@ module Capsule = struct
     | Exn (exn, bt) -> Exn.raise_with_original_backtrace exn bt
   ;;
 
-  let[@inline] globalize = function
-    | Ok (a, key) -> Ok (a, key)
+  let[@inline] globalize : 'a t @ local unique -> 'a t @ unique = function
+    | Ok (a, key) -> Ok (a, Capsule.Key.globalize_unique key)
     | Exn (exn, bt) -> Exn (exn, bt)
   ;;
 end

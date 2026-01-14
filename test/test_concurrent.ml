@@ -32,7 +32,8 @@ module Test_scheduler (Scheduler : Parallel.Scheduler.S_concurrent) = struct
     Concurrent.Scheduler.spawn
       scheduler
       global_scope
-      ~f:(fun _scope _parallel concurrent -> f (Concurrent.await concurrent) [@nontail])
+      (Concurrent.task (fun _scope _parallel concurrent ->
+         f (Concurrent.await concurrent) [@nontail]))
   ;;
 
   let%expect_test "basic concurrent-parallel" =
@@ -91,28 +92,18 @@ module Test_scheduler (Scheduler : Parallel.Scheduler.S_concurrent) = struct
           Parallel.fork_join2
             parallel
             (fun parallel ->
-              Await_blocking.with_await Terminator.never ~f:(fun await ->
-                Mutex.with_access await mutex ~f:(fun _ ->
-                  let #((), ()) =
-                    Parallel.fork_join2
-                      parallel
-                      (fun _ -> printf ".")
-                      (fun _ -> printf ".")
-                  in
-                  ())
-                [@nontail])
+              Mutex.with_access (Await_blocking.await Terminator.never) mutex ~f:(fun _ ->
+                let #((), ()) =
+                  Parallel.fork_join2 parallel (fun _ -> printf ".") (fun _ -> printf ".")
+                in
+                ())
               [@nontail])
             (fun parallel ->
-              Await_blocking.with_await Terminator.never ~f:(fun await ->
-                Mutex.with_access await mutex ~f:(fun _ ->
-                  let #((), ()) =
-                    Parallel.fork_join2
-                      parallel
-                      (fun _ -> printf ".")
-                      (fun _ -> printf ".")
-                  in
-                  ())
-                [@nontail])
+              Mutex.with_access (Await_blocking.await Terminator.never) mutex ~f:(fun _ ->
+                let #((), ()) =
+                  Parallel.fork_join2 parallel (fun _ -> printf ".") (fun _ -> printf ".")
+                in
+                ())
               [@nontail])
         in
         ()));
@@ -128,13 +119,11 @@ module Test_scheduler (Scheduler : Parallel.Scheduler.S_concurrent) = struct
       schedule_async scheduler ~f:(fun await ->
         Mutex.with_access await mutex ~f:(fun _ -> printf "."));
       Scheduler.parallel scheduler ~f:(fun parallel ->
-        Await_blocking.with_await Terminator.never ~f:(fun await ->
-          Mutex.with_access await mutex ~f:(fun _ ->
-            let #((), ()) =
-              Parallel.fork_join2 parallel (fun _ -> printf ".") (fun _ -> printf ".")
-            in
-            ())
-          [@nontail])
+        Mutex.with_access (Await_blocking.await Terminator.never) mutex ~f:(fun _ ->
+          let #((), ()) =
+            Parallel.fork_join2 parallel (fun _ -> printf ".") (fun _ -> printf ".")
+          in
+          ())
         [@nontail]));
     [%expect {| .... |}]
   ;;

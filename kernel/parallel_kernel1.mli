@@ -18,12 +18,12 @@ val with_parallel
   -> scheduler:Parallel_kernel0.Scheduler.t
   -> tokens:int
   -> password:'k Capsule.Password.t @ local
-  -> handler:Parallel_kernel0.Wait.t Effect.Handler.t @ local portable
+  -> handler:Parallel_kernel0.Wait.t Handled_effect.Handler.t @ local portable
   -> 'a @ local portable unique
 
 val handler_exn
   :  t @ local
-  -> Parallel_kernel0.Wait.t Effect.Handler.t @ contended local portable
+  -> Parallel_kernel0.Wait.t Handled_effect.Handler.t @ contended local portable
 
 module Thunk : sig
   include module type of struct

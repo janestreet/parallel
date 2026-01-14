@@ -8,8 +8,6 @@ open! Import
 
 type 'a t = nativeint#
 
-external to_nativeint : _ t -> nativeint @@ portable = "%box_nativeint"
-
 external unsafe_of_value
   :  'a @ local once
   -> 'a t @ once
@@ -24,8 +22,8 @@ external unsafe_to_value
   = "caml_native_pointer_to_value_bytecode" "caml_native_pointer_to_value"
 [@@noalloc] [@@builtin] [@@no_effects] [@@no_coeffects]
 
-let[@inline] null () = #0n
-let[@inline] equal a b = Nativeint.equal (to_nativeint a) (to_nativeint b)
+let null = Nativeint_u.zero
+let equal = Nativeint_u.equal
 
 let[@inline] unsafe_with_value (type a) (a : a) ~f = exclave_
   (* Safe because [opaque_identity] does not look at [a]. *)
@@ -53,7 +51,7 @@ module Imm = struct
     @@ portable
     = "%reinterpret_unboxed_int64_as_tagged_int63"
 
-  let[@inline] of_ptr ptr = of_i64 (Int64_u.of_nativeint (to_nativeint ptr))
+  let[@inline] of_ptr ptr = of_i64 (Int64_u.unbox (Nativeint_u.to_int64 ptr))
 
   external to_ptr
     :  'a t
