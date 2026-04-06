@@ -63,4 +63,4 @@ val await_or_run
   :  'a t
   -> 'a Parallel_kernel1.Job.t @ once portable
   -> Parallel_kernel1.t @ local
-  -> 'a Result.Capsule.t @ local unique
+  -> #('a Result.Capsule.t * tokens:int) @ local unique

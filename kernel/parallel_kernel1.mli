@@ -19,7 +19,7 @@ val with_parallel
   -> tokens:int
   -> password:'k Capsule.Password.t @ local
   -> handler:Parallel_kernel0.Wait.t Handled_effect.Handler.t @ local portable
-  -> 'a @ local portable unique
+  -> #('a * tokens:int) @ local portable unique
 
 val handler_exn
   :  t @ local

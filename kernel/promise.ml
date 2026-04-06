@@ -33,7 +33,8 @@ type 'k suspension =
   | Done
   | Trigger of Await.Trigger.t @@ aliased many * (unit continuation, 'k) Capsule.Data.t
   | Promise :
-      'a t @@ aliased many * ('a Result.Capsule.t continuation, 'k) Capsule.Data.t
+      'a t @@ aliased many
+      * (('a Result.Capsule.t * tokens:int) continuation, 'k) Capsule.Data.t
       -> 'k suspension
 
 let[@inline] start () = Unique.Atomic.make Start
@@ -43,11 +44,7 @@ let[@inline] [@loop] rec continue
     a @ portable unique
     -> scheduler:Parallel_kernel0.Scheduler.t
     -> key:k Capsule.Key.t @ unique
-    -> cont:
-         ( (a, (unit, unit) Wait.Contended.Result.t, unit) Handled_effect.Continuation.t
-           , k )
-           Capsule.Data.t
-       @ unique
+    -> cont:(a continuation, k) Capsule.Data.t @ unique
     -> unit
   =
   fun a ~scheduler ~key ~cont ->
@@ -81,9 +78,10 @@ let[@inline] [@loop] rec continue
   | Promise (t, cont) ->
     (match Unique.Atomic.exchange t (Blocking { key; cont }) with
      | Claimed -> ()
-     | Ready a ->
+     | Ready { result; tokens } ->
        (match Unique.Atomic.exchange t Claimed with
-        | Blocking { key; cont } -> continue a ~scheduler ~key ~cont
+        | Blocking { key; cont } ->
+          continue ((result, ~tokens) : _ * tokens:int) ~scheduler ~key ~cont
         | Start | Claimed | Ready _ ->
           (* Impossible: the promise has been [fill]ed, so we are the only writer, and we
              just wrote [Blocking]. *)
@@ -94,13 +92,14 @@ let[@inline] [@loop] rec continue
        assert false)
 ;;
 
-let[@inline] fill t a ~(scheduler : Parallel_kernel0.Scheduler.t) =
-  match Unique.Atomic.exchange t (Ready a) with
+let[@inline] fill t a ~(scheduler : Parallel_kernel0.Scheduler.t) ~tokens =
+  match Unique.Atomic.exchange t (Ready { result = a; tokens }) with
   | Claimed -> ()
   | Blocking { key; cont } ->
     (match Unique.Atomic.exchange t Claimed with
-     | Ready a ->
-       scheduler.#promote (fun () -> continue a ~scheduler ~key ~cont)
+     | Ready { result; tokens } ->
+       scheduler.#promote (fun () ->
+         continue ((result, ~tokens) : _ * tokens:int) ~scheduler ~key ~cont)
        (* We do not call [scheduler.#wake], as this worker is about to return to the
           scheduler. *)
      | Start | Claimed | Blocking _ ->
@@ -114,14 +113,17 @@ let[@inline] fill t a ~(scheduler : Parallel_kernel0.Scheduler.t) =
 
 let[@inline] await_or_run t job parallel = exclave_
   match Unique.Atomic.compare_and_set t ~if_phys_equal_to:Start ~replace_with:Claimed with
-  | Set_here -> job parallel
+  | Set_here ->
+    (* If the job was not stolen, we don't reclaim its tokens. *)
+    #(job parallel, ~tokens:0)
   | Compare_failed ->
     (match Unique.Atomic.exchange t Claimed with
      | Claimed ->
-       Wait.Contended.perform
-         (Parallel_kernel1.handler_exn parallel)
-         (Promise t) [@nontail]
-     | Ready a -> a
+       let result, ~tokens =
+         Wait.Contended.perform (Parallel_kernel1.handler_exn parallel) (Promise t)
+       in
+       #(result, ~tokens)
+     | Ready { result; tokens } -> #(result, ~tokens)
      | Start | Blocking _ ->
        (* Impossible: the job is already claimed, and claimed jobs are [await]ed exactly
           once. *)
@@ -134,10 +136,10 @@ let[@inline] apply t job ~scheduler ~tokens ~handler =
     let (P (type k) (key : k Capsule.Key.t)) = Capsule.create () in
     let #((), (_ : k Capsule.Key.t)) =
       Capsule.Key.with_password key ~f:(fun [@inline] password ->
-        let result =
+        let #(result, ~tokens) =
           Parallel_kernel1.with_parallel job ~scheduler ~tokens ~password ~handler
         in
-        fill t (Result.Capsule.globalize result) ~scheduler)
+        fill t (Result.Capsule.globalize result) ~scheduler ~tokens)
     in
     ()
   | Compare_failed -> ()

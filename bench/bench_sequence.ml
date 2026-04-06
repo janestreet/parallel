@@ -82,4 +82,4 @@ module Bench_seqs (Scheduler : Parallel.Scheduler.S) = struct
 end
 
 module%bench Bench_sequential = Bench_seqs (Parallel.Scheduler.Sequential)
-module%bench Bench_work_stealing = Bench_seqs (Parallel_scheduler)
+module%bench Bench_parallel = Bench_seqs (Parallel_scheduler)

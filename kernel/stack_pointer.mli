@@ -15,18 +15,21 @@ val equal : 'a t @ local -> 'b t @ local -> bool
 (** [use t ~f] unwraps [t] and passes the result to [f]. The resulting local reference to
     [a] must not outlive the value pointed to by [t]. *)
 val%template use
-  :  'a t
-  -> f:('a option @ local once -> ('b : k) @ local portable unique) @ local once
+  : ('b : k).
+  'a t
+  -> f:('a option @ local once -> 'b @ local portable unique) @ local once
   -> 'b @ local portable unique
 [@@kind k = (value, word & value & value)]
 
 (** [unsafe_with_value a ~f] is only permitted when [a] is stack-allocated and will
     outlive the resulting pointer. Ensures that [a] lives at least as long as the duration
     of [f]. *)
-val unsafe_with_value
-  :  'a @ local once
+val%template unsafe_with_value
+  : ('b : k).
+  'a @ local once
   -> f:('a t -> 'b @ local portable unique) @ local once
   -> 'b @ local portable unique
+[@@kind k = (value, value & value)]
 
 module Imm : sig
   type 'a ptr := 'a t

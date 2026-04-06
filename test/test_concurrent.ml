@@ -24,7 +24,8 @@ module Test_scheduler (Scheduler : Parallel.Scheduler.S_concurrent) = struct
   ;;
 
   let global_scope =
-    Scope.Global.create () ~on_exit:(fun _scope exn -> assert (Or_null.is_null exn))
+    Concurrent.Scope.Global.create () ~on_exit:(fun _scope exn ->
+      assert (Or_null.is_null exn))
   ;;
 
   let schedule_async scheduler ~f =
@@ -84,22 +85,21 @@ module Test_scheduler (Scheduler : Parallel.Scheduler.S_concurrent) = struct
   ;;
 
   let%expect_test "locking in sibling tasks doesn't deadlock" =
-    let (P key) = Capsule.Expert.create () in
-    let mutex = Mutex.create key in
+    let (P mutex) = Capsule.Sync.Mutex.create () in
     with_scheduler (fun scheduler ->
       Scheduler.parallel scheduler ~f:(fun parallel ->
         let #((), ()) =
           Parallel.fork_join2
             parallel
             (fun parallel ->
-              Mutex.with_access (Await_blocking.await Terminator.never) mutex ~f:(fun _ ->
+              Parallel.Capsule.Mutex.with_lock parallel mutex ~f:(fun parallel _ ->
                 let #((), ()) =
                   Parallel.fork_join2 parallel (fun _ -> printf ".") (fun _ -> printf ".")
                 in
                 ())
               [@nontail])
             (fun parallel ->
-              Mutex.with_access (Await_blocking.await Terminator.never) mutex ~f:(fun _ ->
+              Parallel.Capsule.Mutex.with_lock parallel mutex ~f:(fun parallel _ ->
                 let #((), ()) =
                   Parallel.fork_join2 parallel (fun _ -> printf ".") (fun _ -> printf ".")
                 in
@@ -111,15 +111,14 @@ module Test_scheduler (Scheduler : Parallel.Scheduler.S_concurrent) = struct
   ;;
 
   let%expect_test "locking in async tasks doesn't deadlock" =
-    let (P key) = Capsule.Expert.create () in
-    let mutex = Mutex.create key in
+    let (P mutex) = Capsule.Sync.Mutex.create () in
     with_scheduler ~max_domains:1 (fun scheduler ->
-      schedule_async scheduler ~f:(fun await ->
-        Mutex.with_access await mutex ~f:(fun _ -> printf "."));
-      schedule_async scheduler ~f:(fun await ->
-        Mutex.with_access await mutex ~f:(fun _ -> printf "."));
       Scheduler.parallel scheduler ~f:(fun parallel ->
-        Mutex.with_access (Await_blocking.await Terminator.never) mutex ~f:(fun _ ->
+        Parallel.Capsule.Mutex.with_lock parallel mutex ~f:(fun _ _ -> printf "."));
+      Scheduler.parallel scheduler ~f:(fun parallel ->
+        Parallel.Capsule.Mutex.with_lock parallel mutex ~f:(fun _ _ -> printf "."));
+      Scheduler.parallel scheduler ~f:(fun parallel ->
+        Parallel.Capsule.Mutex.with_lock parallel mutex ~f:(fun parallel _ ->
           let #((), ()) =
             Parallel.fork_join2 parallel (fun _ -> printf ".") (fun _ -> printf ".")
           in

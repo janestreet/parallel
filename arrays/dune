@@ -2,6 +2,6 @@
  (name parallel_arrays)
  (public_name parallel.arrays)
  (libraries base_bigstring unboxed.float32 parallel_kernel stdlib_stable
-   unboxed_datatypes vec)
+   unboxed_datatypes)
  (preprocess
   (pps ppx_jane)))

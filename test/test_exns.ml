@@ -253,12 +253,12 @@ let%expect_test "concurrent scope" =
 ;;
 
 let%expect_test "concurrent terminated" =
-  let wait : unit Await.Ivar.t = Await.Ivar.create () in
+  let wait : unit Await.Await.Ivar.t = Await.Await.Ivar.create () in
   Await.Terminator.with_ (fun terminator ->
     Await.Terminator.source terminator
     |> Or_null.iter ~f:Await.Terminator.Source.terminate;
     run_concurrent ~terminator ~f:(fun concurrent ->
-      Await.Ivar.read (Concurrent.await concurrent) wait [@nontail])
+      Await.Await.Ivar.read (Concurrent.await concurrent) wait [@nontail])
     [@nontail]);
   [%expect {| Top level: (Terminated) |}]
 ;;
@@ -271,25 +271,25 @@ let%expect_test "concurrent task" =
 ;;
 
 let%expect_test "concurrent task terminated" =
-  let wait = Await.Ivar.create () in
+  let wait = Await.Await.Ivar.create () in
   run_concurrent ~terminator:never ~f:(fun concurrent ->
     Concurrent.with_scope concurrent () ~f:(fun spawn ->
       Concurrent.spawn spawn ~f:(fun _scope _parallel concurrent ->
-        Await.Ivar.read (Concurrent.await concurrent) wait [@nontail];
+        Await.Await.Ivar.read (Concurrent.await concurrent) wait [@nontail];
         failwith "unreachable");
       Concurrent.spawn spawn ~f:(fun _scope _parallel _concurrent -> failwith "fail")));
   [%expect {| Top level: (Failure fail) |}]
 ;;
 
 let%expect_test "concurrent parallel task terminated" =
-  let wait : unit Await.Ivar.t = Await.Ivar.create () in
+  let wait : unit Await.Await.Ivar.t = Await.Await.Ivar.create () in
   run_concurrent ~terminator:never ~f:(fun concurrent ->
     Concurrent.with_scope concurrent () ~f:(fun spawn ->
       Concurrent.spawn spawn ~f:(fun _scope parallel concurrent ->
         let #((), ()) =
           Parallel.Biased.fork_join2
             parallel
-            (fun _ -> Await.Ivar.read (Concurrent.await concurrent) wait [@nontail])
+            (fun _ -> Await.Await.Ivar.read (Concurrent.await concurrent) wait [@nontail])
             (fun _ -> ())
         in
         ());
@@ -298,9 +298,9 @@ let%expect_test "concurrent parallel task terminated" =
 ;;
 
 let%expect_test "concurrent scheduler terminated" =
-  let wait = Await.Ivar.create () in
+  let wait = Await.Await.Ivar.create () in
   let scope =
-    Await.Scope.Global.create () ~on_exit:(fun _scope maybe_exn ->
+    Await.Await.Scope.Global.create () ~on_exit:(fun _scope maybe_exn ->
       Or_null.iter maybe_exn ~f:(fun (exn, _bt) ->
         printf "Uncaught exn: %s\n" (Exn.to_string exn)))
   in
@@ -309,7 +309,7 @@ let%expect_test "concurrent scheduler terminated" =
       scheduler
       scope
       (Concurrent.task (fun _scope _parallel concurrent ->
-         Await.Ivar.read (Concurrent.await concurrent) wait;
+         Await.Await.Ivar.read (Concurrent.await concurrent) wait;
          failwith "unreachable"));
     Concurrent.Scheduler.spawn
       scheduler
@@ -393,7 +393,7 @@ let%expect_test "concurrent parallel into_scope" =
 
 let%expect_test "concurrent scheduler" =
   let scope =
-    Await.Scope.Global.create () ~on_exit:(fun _scope maybe_exn ->
+    Await.Await.Scope.Global.create () ~on_exit:(fun _scope maybe_exn ->
       Or_null.iter maybe_exn ~f:(fun (exn, _bt) ->
         printf "Uncaught exn: %s\n" (Exn.to_string exn)))
   in
@@ -407,7 +407,7 @@ let%expect_test "concurrent scheduler" =
 
 let%expect_test "concurrent scheduler parallel" =
   let scope =
-    Await.Scope.Global.create () ~on_exit:(fun _scope maybe_exn ->
+    Await.Await.Scope.Global.create () ~on_exit:(fun _scope maybe_exn ->
       Or_null.iter maybe_exn ~f:(fun (exn, _bt) ->
         printf "Uncaught exn: %s\n" (Exn.to_string exn)))
   in

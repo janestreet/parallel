@@ -8,8 +8,7 @@ To expose an opportunity for parallelism, user code calls a `fork_join` function
 ```ocaml
 (** [fork_join2 t f g] runs [f] and [g] as parallel tasks and returns their results. If
     either task raises, this operation will reraise the leftmost exception after both
-    tasks have completed or raised. Child tasks must not block on each other or the parent
-    task, but they may take locks.
+    tasks have completed or raised.
 
     [f] and [g] are [shareable], so can capture both [shared] and [uncontended]
     references. This allows the tasks to read (but not mutate) state from the environment.

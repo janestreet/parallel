@@ -42,9 +42,20 @@ let with_parallel f ~scheduler ~tokens ~password ~handler = exclave_
   in
   let t = stack_ Parallel { password; queue; handler; scheduler } in
   (* Assure [t] outlives the application of [f]. *)
-  Stack_pointer.unsafe_with_value t ~f:(fun [@inline] ptr -> exclave_
-    let ptr = Stack_pointer.Imm.of_ptr ptr in
-    Dynamic.unsafe_with ~ptr (fun [@inline] () -> exclave_ f t) [@nontail])
+  (Stack_pointer.unsafe_with_value [@kind value & value])
+    t
+    ~f:(fun [@inline] ptr -> exclave_
+      let ptr = Stack_pointer.Imm.of_ptr ptr in
+      Dynamic.unsafe_with ~ptr (fun [@inline] () -> exclave_
+        let res = f t in
+        let tokens =
+          Capsule.Data.Local.extract
+            queue
+            ~password
+            ~f:(fun [@inline] { Runqueue.tokens; _ } -> tokens)
+        in
+        #(res, ~tokens))
+      [@nontail])
   [@nontail]
 ;;
 

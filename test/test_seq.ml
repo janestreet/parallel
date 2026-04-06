@@ -417,16 +417,8 @@ module Test_scheduler (Scheduler : Parallel.Scheduler.S) = struct
           Seq.unfold
             ~init:((0, 10) : int * int)
             ~length:(fun (l, r) -> r - l)
-            ~next:(fun _ (l, r) ->
-              if l < r
-              then (Option_u.some [@kind value_or_null & value_or_null]) #(l, (l + 1, r))
-              else (Option_u.none [@kind value_or_null & value_or_null]) ())
-            ~split_at:(fun _ (l, r) ~n ->
-              if l < r - 1
-              then
-                (Option_u.some [@kind value_or_null & value_or_null])
-                  #((l, l + n), (l + n, r))
-              else (Option_u.none [@kind value_or_null & value_or_null]) ())
+            ~next:(fun _ (l, r) -> #(l, (l + 1, r)))
+            ~split_at:(fun _ (l, r) ~n -> #((l, l + n), (l + n, r)))
         in
         printf "%d\n" (Seq.length seq);
         collect parallel (Sequence.of_with_length seq) [@nontail]);

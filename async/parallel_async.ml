@@ -23,7 +23,7 @@ let create
     |> Capsule.Initial.Data.wrap
   in
   let scope =
-    Await.Scope.Global.create () ~on_exit:(fun _scope maybe_exn ->
+    Concurrent.Scope.Global.create () ~on_exit:(fun _scope maybe_exn ->
       Or_null.iter maybe_exn ~f:(fun (exn, bt) ->
         Async_kernel.Async_kernel_scheduler.portable_enqueue_job
           execution_context

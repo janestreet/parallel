@@ -22,16 +22,17 @@ external unsafe_to_value
   = "caml_native_pointer_to_value_bytecode" "caml_native_pointer_to_value"
 [@@noalloc] [@@builtin] [@@no_effects] [@@no_coeffects]
 
-let null = Nativeint_u.zero
+let null () = Nativeint_u.zero
 let equal = Nativeint_u.equal
 
-let[@inline] unsafe_with_value (type a) (a : a) ~f = exclave_
+let%template[@inline] unsafe_with_value (type a) (a : a) ~f = exclave_
   (* Safe because [opaque_identity] does not look at [a]. *)
   let a = Obj.magic_many a in
   let res = f (unsafe_of_value a) in
   (* Ensure that [a] is still live. *)
   let _ : a = Sys.opaque_identity a in
   res
+[@@kind k = (value, value & value)]
 ;;
 
 let%template[@inline] use t ~f = exclave_

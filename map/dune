@@ -1,0 +1,7 @@
+(library
+ (name parallel_map)
+ (public_name parallel.map)
+ (libraries base parallel_kernel parallel_sequence portable.kernel
+   unboxed_datatypes)
+ (preprocess
+  (pps ppx_jane)))

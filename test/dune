@@ -1,9 +1,10 @@
 (library
  (name parallel_test)
  (public_name parallel.test)
- (libraries async await await.blocking base_bigstring bignum.bigint
-   concurrent core expect_test_helpers_core unboxed.float32 unboxed.int64_u
-   parallel parallel_scheduler portable portable.test_helpers stdlib_stable
-   threads unboxed_datatypes vec)
+ (libraries await base_bigstring bignum.bigint concurrent core
+   expect_test_helpers_core unboxed.float32 unboxed.float32_u unboxed.float_u
+   unboxed.int32_u unboxed.int64_u unboxed.nativeint_u parallel
+   parallel_scheduler portable portable.test_helpers stdlib_stable threads
+   unboxed_datatypes vec)
  (preprocess
   (pps ppx_jane)))

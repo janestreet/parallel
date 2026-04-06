@@ -13,7 +13,7 @@ end =
 
 and Ops : sig @@ portable
   type 'a t =
-    | Promise : 'a Promise.t -> 'a Result.Capsule.t t
+    | Promise : 'a Promise.t -> ('a Result.Capsule.t * tokens:int) t
     | Trigger : Await.Trigger.t -> unit t
 end =
   Ops
@@ -29,10 +29,14 @@ and Promise : sig @@ portable
     | Claimed
     | Blocking :
         { key : 'k Capsule.Key.t @@ many
-        ; cont : ('a Result.Capsule.t continuation, 'k) Capsule.Data.t @@ many
+        ; cont : (('a Result.Capsule.t * tokens:int) continuation, 'k) Capsule.Data.t
+          @@ many
         }
         -> 'a state
-    | Ready of 'a Result.Capsule.t @@ contended many portable
+    | Ready of
+        { result : 'a Result.Capsule.t @@ contended many portable
+        ; tokens : int
+        }
 
   type 'a t = 'a state Unique.Atomic.t
 end =

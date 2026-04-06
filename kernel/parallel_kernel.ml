@@ -62,12 +62,6 @@ module For_scheduler = struct
       ~tokens:0
       ~lazy_
   ;;
-
-  let[@inline] await parallel trigger =
-    Parallel_kernel0.Wait.Contended.perform
-      (Parallel_kernel1.handler_exn parallel)
-      (Trigger trigger) [@nontail]
-  ;;
 end
 
 module For_testing = struct
@@ -78,6 +72,16 @@ module For_testing = struct
 end
 
 let sequential = Sequential
+
+let sync t =
+  match t with
+  | Sequential -> Sync.blocking
+  | Parallel _ ->
+    let sync #({ portended = t }, { global = trigger }) =
+      Parallel_kernel0.Wait.Contended.perform (handler_exn t) (Trigger trigger) [@nontail]
+    in
+    exclave_ (Sync.create [@alloc stack]) ~yield:Null ~sync t
+;;
 
 let[@inline] [@loop] [@unroll] [@tail_mod_cons] rec unwrap
   : type l. l Hlist.Gen(Result).t @ local -> l Hlist.t
@@ -333,33 +337,49 @@ let[@inline] fork_join5 t f1 f2 f3 f4 f5 =
     (Magic.require_forkable_shareable f5) [@nontail]
 ;;
 
-(* Implemented as a separate function from [fold] for speed. *)
 let[@inline] for_ t ~start ~stop ~f =
-  (* [grain] is the number of sequential iterations between heartbeat checks. It increases
-     geometrically until a heartbeat occurs. *)
-  let[@inline] [@loop] rec aux t ~start ~stop ~grain =
+  let[@inline] rec aux t ~start ~stop ~grain =
     if start >= stop
     then ()
-    else if Scheduler.has_tokens t
-    then (
-      let chunk = (stop - start) / 2 in
-      if chunk = 0
-      then f t start
-      else (
-        let pivot = start + chunk in
+    else (
+      (* We compute [grain] sequential iterations while forking off the rest of the loop.
+         If the fork is not stolen, it continues iterating sequentially with twice the
+         granularity. Otherwise, the fork splits the remaining work and resets [grain].
+         This strategy aggregates cheap iterations into sequential blocks while avoiding
+         blocking on expensive iterations. *)
+      let pivot = Int.min (start + grain) stop in
+      Stack_pointer.unsafe_with_value t ~f:(fun [@inline] t_ptr ->
         let #((), ()) =
           fork_join2
             t
-            (fun t -> aux t ~start ~stop:pivot ~grain:1)
-            (fun t -> aux t ~start:pivot ~stop ~grain:1)
+            (fun [@inline] t ->
+              for i = start to pivot - 1 do
+                f t i
+              done)
+            (fun [@inline] t ->
+              (* We get a physically distinct [t] iff we were stolen. *)
+              if Stack_pointer.unsafe_with_value t ~f:(fun [@inline] t_ptr' ->
+                   Stack_pointer.equal t_ptr t_ptr')
+              then aux t ~start:pivot ~stop ~grain:(grain lsl 1)
+              else
+                (* [fork] resets [grain], so worst-case stack depth is θ(log^2(n)). *)
+                fork t ~start:pivot ~stop)
         in
-        ()))
+        ())
+      [@nontail])
+  and[@cold] fork t ~start ~stop =
+    if start >= stop
+    then ()
     else (
-      let chunk = Int.min (start + grain) stop in
-      for i = start to chunk - 1 do
-        f t i
-      done;
-      aux t ~start:chunk ~stop ~grain:(grain lsl 1))
+      let chunk = (stop - start) / 2 in
+      let pivot = start + chunk in
+      let #((), ()) =
+        fork_join2
+          t
+          (fun [@inline] t -> aux t ~start ~stop:pivot ~grain:1)
+          (fun [@inline] t -> aux t ~start:pivot ~stop ~grain:1)
+      in
+      ())
   in
   aux t ~start ~stop ~grain:1
 ;;
@@ -409,5 +429,7 @@ let%template[@inline] fold
       | Yield -> aux t ~acc ~state ~grain:(grain lsl 1))
   in
   aux t ~acc:(init ()) ~state ~grain:1
-[@@kind acc = base_or_null, seq = (base_or_null, value_or_null & value_or_null)]
+[@@kind
+  acc = (base_or_null, value_or_null & base_or_null)
+  , seq = (base_or_null, value_or_null & value_or_null)]
 ;;

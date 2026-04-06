@@ -1,9 +1,10 @@
 open! Base
 open! Import
+module Int64 = Base.Int64
 module Bigstring = Base_bigstring
 
 module Kind = struct
-  type 'a t =
+  type ('a : any) t =
     | Char : char t
     | Int8 : int8 t
     | Int16 : int16 t
@@ -13,7 +14,7 @@ module Kind = struct
     | Float64 : float t
   [@@deriving sexp_of]
 
-  let width (type a) : a t -> int = function
+  let width (type a : any) : a t -> int = function
     | Char -> 1
     | Int8 -> 1
     | Int16 -> 2
@@ -25,7 +26,7 @@ module Kind = struct
   ;;
 end
 
-type 'a t =
+type ('a : any) t =
   { kind : 'a Kind.t
   ; data : Bigstring.t
   }
@@ -50,7 +51,7 @@ let[@inline] create kind n = { kind; data = Bigstring.create (n * Kind.width kin
 let[@inline] kind { kind; _ } = kind
 let[@inline] data { data; _ } = data
 
-let%template sub_shared (type a) ({ kind; data } : a t) ~pos ~len =
+let%template sub_shared (type a : any) ({ kind; data } : a t) ~pos ~len =
   let width = Kind.width kind in
   let len = width * len in
   let pos = width * pos in
@@ -75,7 +76,7 @@ let[@inline] length { kind; data } = length data / Kind.width kind
    which is the common case for 16-byte operations. *)
 
 [%%template
-  let get (type a) { kind : a Kind.t; data } pos : a =
+  let get (type a : value_or_null) { kind : a Kind.t; data } pos : a =
     let pos = pos * Kind.width kind in
     match kind with
     | Char -> Bigstring.get data pos
@@ -88,7 +89,7 @@ let[@inline] length { kind; data } = length data / Kind.width kind
   [@@inline]
   ;;]
 
-let set (type a) { kind : a Kind.t; data } pos (a : a) =
+let set (type a : value_or_null) { kind : a Kind.t; data } pos (a : a) =
   let pos = pos * Kind.width kind in
   match kind with
   | Char -> Bigstring.set data pos a
@@ -101,7 +102,7 @@ let set (type a) { kind : a Kind.t; data } pos (a : a) =
 [@@inline]
 ;;
 
-let unsafe_get (type a) { kind : a Kind.t; data } pos : a =
+let unsafe_get (type a : value_or_null) { kind : a Kind.t; data } pos : a =
   let pos = pos * Kind.width kind in
   match kind with
   | Char -> Bigstring.unsafe_get data pos
@@ -115,7 +116,7 @@ let unsafe_get (type a) { kind : a Kind.t; data } pos : a =
 [@@inline]
 ;;
 
-let unsafe_set (type a) { kind : a Kind.t; data } pos (a : a) =
+let unsafe_set (type a : value_or_null) { kind : a Kind.t; data } pos (a : a) =
   let pos = pos * Kind.width kind in
   match kind with
   | Char -> Bigstring.unsafe_set data pos a

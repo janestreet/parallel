@@ -11,23 +11,24 @@ type t : value mod contended portable
 (** A trivial implementation of parallelism that runs all tasks sequentially. *)
 val sequential : t
 
+(** [sync t] is an [Await.Sync.t] that may be used to acquire locks inside parallel
+    functions. To do nested parallelism while holding a lock, use [Parallel.Capsule]. *)
+val sync : t @ local -> Sync.t @ local
+
 module Thunk : sig
   type nonrec 'a t = t @ local -> 'a
 end
 
 (** [fork_join t fs] runs the functions in the heterogenous list [f] as parallel tasks and
     returns their results. If any task raises, this operation will reraise the leftmost
-    exception after all tasks have completed or raised.
-
-    Child tasks must not block on each other or the parent task, but they may take locks. *)
+    exception after all tasks have completed or raised. *)
 val fork_join : t @ local -> 'l Hlist.Gen(Thunk).t @ once shareable -> 'l Hlist.t
 
 (* $MDX part-begin=fork_join2 *)
 
 (** [fork_join2 t f g] runs [f] and [g] as parallel tasks and returns their results. If
     either task raises, this operation will reraise the leftmost exception after both
-    tasks have completed or raised. Child tasks must not block on each other or the parent
-    task, but they may take locks.
+    tasks have completed or raised.
 
     [f] and [g] are [shareable], so can capture both [shared] and [uncontended]
     references. This allows the tasks to read (but not mutate) state from the environment.
@@ -140,7 +141,9 @@ val%template fold
   -> fork:(t @ local -> 'seq -> (#('seq * 'seq) Option_u.t[@kind seq & seq])) @ shareable
   -> join:(t @ local -> 'ret -> 'ret -> 'ret) @ shareable
   -> 'ret
-[@@kind acc = base_or_null, seq = (base_or_null, value_or_null & value_or_null)]
+[@@kind
+  acc = (base_or_null, value_or_null & base_or_null)
+  , seq = (base_or_null, value_or_null & value_or_null)]
 
 module Scheduler : sig
   module type S = Parallel_scheduler_intf.S with type parallel := t
@@ -179,10 +182,6 @@ module For_scheduler : sig
          (** Whether the fiber should be lazily allocated by its executor. If the executor
              is unable to allocate a fiber, it will raise an exception to top level. *)
     -> (unit -> unit) @ once portable
-
-  (** [await t trigger] suspends the current task until [trigger] is signaled, at which
-      point it will be re-promoted. *)
-  val await : t @ local -> Await.Trigger.t -> unit
 
   (** [with_heartbeat f] assures the heartbeat thread is running for the duration of [f]. *)
   val with_heartbeat : (unit -> unit) @ local once -> unit
