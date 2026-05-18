@@ -1,5 +1,4 @@
 open! Base
-open! Import
 
 module type Empty = sig end
 
@@ -9,5 +8,4 @@ end
 
 module Sequential : Scheduler
 module Parallel : Scheduler
-module With_parallel : Scheduler
-module Test_schedulers (Test_scheduler : functor (_ : Scheduler) -> Empty) : Empty
+module Bench_schedulers (Bench_scheduler : functor (_ : Scheduler) -> Empty) : Empty

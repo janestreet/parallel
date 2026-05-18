@@ -1,9 +1,7 @@
 open! Base
 open! Import
 
-module Test_scheduler (Scheduler : Parallel.Scheduler.S) = struct
-  let scheduler = Scheduler.create ()
-
+module Test_scheduler (Scheduler : Common.Scheduler) = struct
   module Test_intf (Seq : Parallel.Sequence.S) = struct
     (* Adapted from base/test/test_sequence.ml *)
     module%test [@name "range symmetries"] _ = struct
@@ -16,7 +14,7 @@ module Test_scheduler (Scheduler : Parallel.Scheduler.S) = struct
       ;;
 
       let test stride (start_n, start) (stop_n, stop) result =
-        Scheduler.parallel scheduler ~f:(fun parallel ->
+        Scheduler.parallel (fun parallel ->
           basic parallel ~stride ~start ~stop ~start_n ~stop_n ~result
           && (* works for negative [start] and [stop] *)
           basic

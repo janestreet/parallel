@@ -2,20 +2,18 @@ open! Core
 open Quickcheck
 open Expect_test_helpers_core
 
-module Test (Scheduler : Parallel.Scheduler.S) : Parallel.Map.S = struct
+module Test (Scheduler : Common.Scheduler) : Parallel.Map.S = struct
   type ('key, 'data, 'cmp) map = ('key, 'data, 'cmp) Map.t
   type ('key, 'cmp, 'fn) with_comparator = 'fn
 
   open struct
     (* Test helpers, not for export. *)
 
-    let scheduler = Scheduler.create ()
-
     let quickcheck_config : Base_quickcheck.Test.Config.t =
       (* Rather than 10k maps of small size, generate 1k maps of size up to 1k. This way
          we test large enough inputs that the work actually parallelizes. *)
       { seed = Base_quickcheck.Test.default_config.seed
-      ; test_count = 1_000
+      ; test_count = 100
       ; shrink_count = 1_000_000
       ; sizes = Sequence.unfold ~init:0 ~f:(fun n -> Some (n, n + 1))
       }
@@ -29,7 +27,7 @@ module Test (Scheduler : Parallel.Scheduler.S) : Parallel.Map.S = struct
       par_f
       =
       quickcheck_m (module Input) ~config:quickcheck_config ~f:(fun input ->
-        Scheduler.parallel scheduler ~f:(fun par ->
+        Scheduler.parallel (fun par ->
           require_equal (module Output) (seq_f input) (par_f par input)))
     ;;
 

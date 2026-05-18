@@ -1,5 +1,6 @@
 open! Core
 open! Import
+open Await
 open Expect_test_helpers_core
 
 type nothing = |
@@ -8,35 +9,18 @@ type scheduler =
   | Seq
   | Work_stealing
 
-let never = Await.Terminator.never
-
 let run sched ~f =
   try
     match sched with
-    | Seq ->
-      let scheduler = Parallel.Scheduler.Sequential.create () in
-      Parallel.Scheduler.Sequential.parallel scheduler ~f
-    | Work_stealing ->
-      let scheduler = Parallel_scheduler.create () in
-      Parallel_scheduler.parallel scheduler ~f;
-      Parallel_scheduler.stop scheduler
+    | Seq -> Common.Sequential.parallel f
+    | Work_stealing -> Common.Parallel.parallel f
   with
   | exn -> printf "Top level: %s\n" (Exn.to_string exn)
 ;;
 
-let run_concurrent ~terminator ~f =
-  let scheduler = Parallel_scheduler.create () in
-  (try Parallel_scheduler.concurrent scheduler ~terminator ~f [@nontail] with
-   | exn -> printf "Top level: %s\n" (Exn.to_string exn));
-  Parallel_scheduler.stop scheduler
-;;
-
-let run_concurrent_scheduler ~f =
-  let scheduler = Parallel_scheduler.create () in
-  let concurrent = Parallel_scheduler.Expert.scheduler scheduler in
-  (try f concurrent with
-   | exn -> printf "Top level: %s\n" (Exn.to_string exn));
-  Parallel_scheduler.stop scheduler
+let run_concurrent ~f =
+  try Parallel_scheduler.with_concurrent f with
+  | exn -> printf "Top level: %s\n" (Exn.to_string exn)
 ;;
 
 let%expect_test "raise" =
@@ -232,64 +216,44 @@ let%expect_test "array map" =
   [%expect {| Top level: (Failure fail) |}]
 ;;
 
-let%expect_test "array map2" =
-  let open Parallel.Arrays in
-  run Seq ~f:(fun parallel ->
-    let array = Array.init parallel 1 ~f:(fun _ _ -> 0) in
-    let _ : _ = Array.map2_exn parallel array array ~f:(fun _ _ _ -> failwith "fail") in
-    ());
-  [%expect {| Top level: (Failure fail) |}]
-;;
-
 let%expect_test "concurrent" =
-  run_concurrent ~terminator:never ~f:(fun _concurrent -> failwith "fail");
+  run_concurrent ~f:(fun _concurrent -> failwith "fail");
   [%expect {| Top level: (Failure fail) |}]
 ;;
 
 let%expect_test "concurrent scope" =
-  run_concurrent ~terminator:never ~f:(fun concurrent ->
+  run_concurrent ~f:(fun concurrent ->
     Concurrent.with_scope concurrent () ~f:(fun _spawn -> failwith "fail"));
   [%expect {| Top level: (Failure fail) |}]
 ;;
 
-let%expect_test "concurrent terminated" =
-  let wait : unit Await.Await.Ivar.t = Await.Await.Ivar.create () in
-  Await.Terminator.with_ (fun terminator ->
-    Await.Terminator.source terminator
-    |> Or_null.iter ~f:Await.Terminator.Source.terminate;
-    run_concurrent ~terminator ~f:(fun concurrent ->
-      Await.Await.Ivar.read (Concurrent.await concurrent) wait [@nontail])
-    [@nontail]);
-  [%expect {| Top level: (Terminated) |}]
-;;
-
 let%expect_test "concurrent task" =
-  run_concurrent ~terminator:never ~f:(fun concurrent ->
+  run_concurrent ~f:(fun concurrent ->
     Concurrent.with_scope concurrent () ~f:(fun spawn ->
       Concurrent.spawn spawn ~f:(fun _scope _parallel _concurrent -> failwith "fail")));
   [%expect {| Top level: (Failure fail) |}]
 ;;
 
 let%expect_test "concurrent task terminated" =
-  let wait = Await.Await.Ivar.create () in
-  run_concurrent ~terminator:never ~f:(fun concurrent ->
+  let wait = Await.Ivar.create () in
+  run_concurrent ~f:(fun concurrent ->
     Concurrent.with_scope concurrent () ~f:(fun spawn ->
       Concurrent.spawn spawn ~f:(fun _scope _parallel concurrent ->
-        Await.Await.Ivar.read (Concurrent.await concurrent) wait [@nontail];
+        Await.Ivar.read (Concurrent.await concurrent) wait [@nontail];
         failwith "unreachable");
       Concurrent.spawn spawn ~f:(fun _scope _parallel _concurrent -> failwith "fail")));
   [%expect {| Top level: (Failure fail) |}]
 ;;
 
 let%expect_test "concurrent parallel task terminated" =
-  let wait : unit Await.Await.Ivar.t = Await.Await.Ivar.create () in
-  run_concurrent ~terminator:never ~f:(fun concurrent ->
+  let wait : unit Await.Ivar.t = Await.Ivar.create () in
+  run_concurrent ~f:(fun concurrent ->
     Concurrent.with_scope concurrent () ~f:(fun spawn ->
       Concurrent.spawn spawn ~f:(fun _scope parallel concurrent ->
         let #((), ()) =
           Parallel.Biased.fork_join2
             parallel
-            (fun _ -> Await.Await.Ivar.read (Concurrent.await concurrent) wait [@nontail])
+            (fun _ -> Await.Ivar.read (Concurrent.await concurrent) wait [@nontail])
             (fun _ -> ())
         in
         ());
@@ -298,28 +262,26 @@ let%expect_test "concurrent parallel task terminated" =
 ;;
 
 let%expect_test "concurrent scheduler terminated" =
-  let wait = Await.Await.Ivar.create () in
-  let scope =
-    Await.Await.Scope.Global.create () ~on_exit:(fun _scope maybe_exn ->
-      Or_null.iter maybe_exn ~f:(fun (exn, _bt) ->
-        printf "Uncaught exn: %s\n" (Exn.to_string exn)))
-  in
-  run_concurrent_scheduler ~f:(fun scheduler ->
-    Concurrent.Scheduler.spawn
-      scheduler
-      scope
-      (Concurrent.task (fun _scope _parallel concurrent ->
-         Await.Await.Ivar.read (Concurrent.await concurrent) wait;
-         failwith "unreachable"));
-    Concurrent.Scheduler.spawn
-      scheduler
-      scope
-      (Concurrent.task (fun _scope _parallel _concurrent -> failwith "fail")));
-  [%expect {| Uncaught exn: (Failure fail) |}]
+  let wait = Await.Ivar.create () in
+  run_concurrent ~f:(fun concurrent ->
+    let scheduler = Concurrent.scheduler concurrent in
+    Await.Scope.with_ (Concurrent.await concurrent) () ~f:(fun _ scope ->
+      Concurrent.Scheduler.spawn
+        scheduler
+        scope
+        (Concurrent.task (fun _scope _parallel concurrent ->
+           Await.Ivar.read (Concurrent.await concurrent) wait;
+           failwith "unreachable"));
+      Concurrent.Scheduler.spawn
+        scheduler
+        scope
+        (Concurrent.task (fun _scope _parallel _concurrent -> failwith "fail")) [@nontail])
+    [@nontail]);
+  [%expect {| Top level: (Failure fail) |}]
 ;;
 
 let%expect_test "concurrent parallel task" =
-  run_concurrent ~terminator:never ~f:(fun concurrent ->
+  run_concurrent ~f:(fun concurrent ->
     Concurrent.with_scope concurrent () ~f:(fun spawn ->
       Concurrent.spawn spawn ~f:(fun _scope parallel _concurrent ->
         let #((), ()) =
@@ -333,7 +295,7 @@ let%expect_test "concurrent parallel task" =
 ;;
 
 let%expect_test "concurrent into scope" =
-  run_concurrent ~terminator:never ~f:(fun concurrent ->
+  run_concurrent ~f:(fun concurrent ->
     Concurrent.with_scope concurrent () ~f:(fun spawn ->
       Concurrent.spawn spawn ~f:(fun scope _parallel concurrent ->
         let spawn = Concurrent.into_scope concurrent scope in
@@ -342,7 +304,7 @@ let%expect_test "concurrent into scope" =
 ;;
 
 let%expect_test "concurrent nested scope" =
-  run_concurrent ~terminator:never ~f:(fun concurrent ->
+  run_concurrent ~f:(fun concurrent ->
     Concurrent.with_scope concurrent () ~f:(fun spawn ->
       Concurrent.spawn spawn ~f:(fun _scope _parallel concurrent ->
         Concurrent.with_scope concurrent () ~f:(fun spawn ->
@@ -351,7 +313,7 @@ let%expect_test "concurrent nested scope" =
 ;;
 
 let%expect_test "concurrent parallel nested" =
-  run_concurrent ~terminator:never ~f:(fun concurrent ->
+  run_concurrent ~f:(fun concurrent ->
     Concurrent.with_scope concurrent () ~f:(fun spawn ->
       Concurrent.spawn spawn ~f:(fun _scope parallel concurrent ->
         let #((), ()) =
@@ -374,7 +336,7 @@ let%expect_test "concurrent parallel nested" =
 ;;
 
 let%expect_test "concurrent parallel into_scope" =
-  run_concurrent ~terminator:never ~f:(fun concurrent ->
+  run_concurrent ~f:(fun concurrent ->
     Concurrent.with_scope concurrent () ~f:(fun spawn ->
       Concurrent.spawn spawn ~f:(fun scope parallel concurrent ->
         let #((), ()) =
@@ -392,37 +354,33 @@ let%expect_test "concurrent parallel into_scope" =
 ;;
 
 let%expect_test "concurrent scheduler" =
-  let scope =
-    Await.Await.Scope.Global.create () ~on_exit:(fun _scope maybe_exn ->
-      Or_null.iter maybe_exn ~f:(fun (exn, _bt) ->
-        printf "Uncaught exn: %s\n" (Exn.to_string exn)))
-  in
-  run_concurrent_scheduler ~f:(fun scheduler ->
-    Concurrent.Scheduler.spawn
-      scheduler
-      scope
-      (Concurrent.task (fun _scope _parallel _concurrent -> failwith "fail")));
-  [%expect {| Uncaught exn: (Failure fail) |}]
+  run_concurrent ~f:(fun concurrent ->
+    let scheduler = Concurrent.scheduler concurrent in
+    Await.Scope.with_ (Concurrent.await concurrent) () ~f:(fun _ scope ->
+      Concurrent.Scheduler.spawn
+        scheduler
+        scope
+        (Concurrent.task (fun _scope _parallel _concurrent -> failwith "fail")))
+    [@nontail]);
+  [%expect {| Top level: (Failure fail) |}]
 ;;
 
 let%expect_test "concurrent scheduler parallel" =
-  let scope =
-    Await.Await.Scope.Global.create () ~on_exit:(fun _scope maybe_exn ->
-      Or_null.iter maybe_exn ~f:(fun (exn, _bt) ->
-        printf "Uncaught exn: %s\n" (Exn.to_string exn)))
-  in
-  run_concurrent_scheduler ~f:(fun scheduler ->
-    Concurrent.Scheduler.spawn
-      scheduler
-      scope
-      (Concurrent.task (fun _scope parallel _concurrent ->
-         let #((), ()) =
-           Parallel.fork_join2
-             parallel
-             (fun _ -> failwith "fail")
-             (fun _ -> failwith "fail")
-         in
-         ())));
+  run_concurrent ~f:(fun concurrent ->
+    let scheduler = Concurrent.scheduler concurrent in
+    Await.Scope.with_ (Concurrent.await concurrent) () ~f:(fun _ scope ->
+      Concurrent.Scheduler.spawn
+        scheduler
+        scope
+        (Concurrent.task (fun _scope parallel _concurrent ->
+           let #((), ()) =
+             Parallel.fork_join2
+               parallel
+               (fun _ -> failwith "fail")
+               (fun _ -> failwith "fail")
+           in
+           ())))
+    [@nontail]);
   (* inner panics are reported to the monitor *)
-  [%expect {| Uncaught exn: (Failure fail) |}]
+  [%expect {| Top level: (Failure fail) |}]
 ;;

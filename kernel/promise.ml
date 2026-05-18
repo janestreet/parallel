@@ -29,13 +29,15 @@ include Parallel_kernel0.Promise
   +-----------+------------+------------+--+-------------------------+
     v} *)
 
+(* See [Parallel_kernel0.Ops.t] *)
 type 'k suspension =
   | Done
-  | Trigger of Await.Trigger.t @@ aliased many * (unit continuation, 'k) Capsule.Data.t
   | Promise :
       'a t @@ aliased many
       * (('a Result.Capsule.t * tokens:int) continuation, 'k) Capsule.Data.t
       -> 'k suspension
+  | Await of Trigger.t @@ aliased many * (unit continuation, 'k) Capsule.Data.t
+  | Yield of (unit continuation, 'k) Capsule.Data.t
 
 let[@inline] start () = Unique.Atomic.make Start
 
@@ -52,29 +54,17 @@ let[@inline] [@loop] rec continue
     Capsule.Key.access key ~f:(fun [@inline] access ->
       let cont = Capsule.Data.unwrap_unique ~access cont in
       match Handled_effect.continue cont a [] with
-      | Value () -> Done
       | Exception exn ->
         (* Cannot have come from the job; indicates a scheduler bug *)
         raise exn
+      | Value () -> Done
       | Operation (Promise t, cont) -> Promise (t, Capsule.Data.wrap_unique ~access cont)
-      | Operation (Trigger t, cont) -> Trigger (t, Capsule.Data.wrap_unique ~access cont))
+      | Operation (Await t, cont) -> Await (t, Capsule.Data.wrap_unique ~access cont)
+      | Operation (Yield, cont) -> Yield (Capsule.Data.wrap_unique ~access cont))
   in
   let key = Capsule.Key.globalize_unique key in
   match result with
   | Done -> ()
-  | Trigger (t, cont) ->
-    let[@inline] continue () = continue () ~scheduler ~key ~cont in
-    (match
-       (* Awaited triggers cannot be dropped, so we don't need to [discontinue]. *)
-       Await.Trigger.on_signal
-         t
-         ~f:(fun continue ->
-           scheduler.#promote continue;
-           scheduler.#wake ~n:1)
-         continue
-     with
-     | Null -> ()
-     | This continue -> continue ())
   | Promise (t, cont) ->
     (match Unique.Atomic.exchange t (Blocking { key; cont }) with
      | Claimed -> ()
@@ -90,6 +80,20 @@ let[@inline] [@loop] rec continue
        (* Impossible: unclaimed jobs are never [await]ed, and claimed jobs are [await]ed
           exactly once. *)
        assert false)
+  | Await (t, cont) ->
+    (* Concurrent tasks return to the global queue. *)
+    let continue () = continue () ~scheduler ~key ~cont in
+    (match
+       (* Awaited triggers cannot be dropped, so we don't need to [discontinue]. *)
+       Trigger.on_signal t ~f:[%eta1 scheduler.#task] continue
+     with
+     | Null -> ()
+     | This continue -> continue ())
+  | Yield cont ->
+    (* Concurrent tasks return to the global queue. Yielding is explicitly a request for
+       fairness, so this is required. *)
+    let continue () = continue () ~scheduler ~key ~cont in
+    scheduler.#task continue
 ;;
 
 let[@inline] fill t a ~(scheduler : Parallel_kernel0.Scheduler.t) ~tokens =
@@ -98,7 +102,7 @@ let[@inline] fill t a ~(scheduler : Parallel_kernel0.Scheduler.t) ~tokens =
   | Blocking { key; cont } ->
     (match Unique.Atomic.exchange t Claimed with
      | Ready { result; tokens } ->
-       scheduler.#promote (fun () ->
+       scheduler.#subtask (fun () ->
          continue ((result, ~tokens) : _ * tokens:int) ~scheduler ~key ~cont)
        (* We do not call [scheduler.#wake], as this worker is about to return to the
           scheduler. *)
@@ -157,22 +161,19 @@ let[@inline] create_fiber t job ~scheduler ~tokens ~key =
   #(cont, key)
 ;;
 
-let fiber_exn t job ~scheduler ~tokens ~lazy_ =
+let fiber_exn t job ~scheduler ~tokens =
   let (P key) = Capsule.create () in
-  if lazy_
-  then
-    fun () ->
-    let #(cont, key) = create_fiber t job ~scheduler ~tokens ~key in
-    continue () ~scheduler ~key ~cont
-  else (
-    let #(cont, key) = create_fiber t job ~scheduler ~tokens ~key in
-    fun () -> continue () ~scheduler ~key ~cont)
+  let #(cont, key) = create_fiber t job ~scheduler ~tokens ~key in
+  fun () -> continue () ~scheduler ~key ~cont
 ;;
 
 let try_fiber t job ~scheduler ~tokens () =
-  let (P key) = Capsule.create () in
-  (* If we fail to allocate a fiber, we drop the job without claiming the promise. *)
-  match create_fiber t job ~scheduler ~tokens ~key with
-  | #(cont, key) -> continue () ~scheduler ~key ~cont
-  | exception Out_of_fibers -> ()
+  match Unique.Atomic.get (Obj.magic_unique t) with
+  | Claimed -> () (* Another worker is responsible for this job. *)
+  | _ ->
+    let (P key) = Capsule.create () in
+    (* If we fail to allocate a fiber, we drop the job without claiming the promise. *)
+    (match create_fiber t job ~scheduler ~tokens ~key with
+     | #(cont, key) -> continue () ~scheduler ~key ~cont
+     | exception Out_of_fibers -> ())
 ;;

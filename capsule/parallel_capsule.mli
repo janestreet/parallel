@@ -164,17 +164,6 @@ module Mutex : sig
     [%%template:
     [@@@alloc.default a @ l = (heap_global, stack_local)]
 
-    val with_key
-      : ('a : value_or_null) 'k.
-      Parallel_kernel.t @ local
-      -> 'k t @ local
-      -> f:
-           (Parallel_kernel.t @ local
-            -> 'k Capsule.Expert.Key.t @ unique
-            -> #('a * 'k Capsule.Expert.Key.t) @ l once unique)
-         @ local once unyielding
-      -> 'a @ l once unique
-
     val with_key_poisoning
       : ('a : value_or_null) 'k.
       Parallel_kernel.t @ local
@@ -185,18 +174,6 @@ module Mutex : sig
             -> #('a * 'k Capsule.Expert.Key.t) @ l once unique)
          @ local once unyielding
       -> 'a @ l once unique
-
-    val with_key_or_cancel
-      : ('a : value_or_null) 'k.
-      Parallel_kernel.t @ local
-      -> Cancellation.t @ local
-      -> 'k t @ local
-      -> f:
-           (Parallel_kernel.t @ local
-            -> 'k Capsule.Expert.Key.t @ unique
-            -> #('a * 'k Capsule.Expert.Key.t) @ l once unique)
-         @ local once unyielding
-      -> 'a Or_canceled.t @ l once unique
 
     val with_key_or_cancel_poisoning
       : ('a : value_or_null) 'k.
@@ -237,8 +214,8 @@ module With_mutex : sig
        @ local once portable unyielding
     -> 'b Or_canceled.t @ contended portable
 
-  (** [with_guard parallel t ~f] locks the mutex associated with [t] and calls [f] with
-      [parallel] and a [Guard.t] for the protected data, returning the result.
+  (** [with_scoped parallel t ~f] locks the mutex associated with [t] and calls [f] with
+      [parallel] and a [Scoped.t] for the protected data, returning the result.
 
       Since the provided callback does not have to be [portable], this is useful when you
       need to acquire two mutexes for different capsules at the same time and move data
@@ -257,35 +234,35 @@ module With_mutex : sig
           -> int ref Capsule.Sync.With_mutex.t -> unit
           =
           fun par ref1 ref2 ->
-          Parallel.Capsule.With_mutex.with_guard par ref1 ~f:(fun par guard1 ->
-            Parallel.Capsule.With_mutex.with_guard par ref2 ~f:(fun _par guard2 ->
+          Parallel.Capsule.With_mutex.with_scoped par ref1 ~f:(fun par scope1 ->
+            Parallel.Capsule.With_mutex.with_scoped par ref2 ~f:(fun _par scope2 ->
               (* At this point we have both mutexes locked, so we can freely manipulate
                  the data they protect without the potential for data races *)
-              let value1 = Capsule.Guard.get guard1 ~f:(fun r -> !r) in
-              let value2 = Capsule.Guard.get guard2 ~f:(fun r -> !r) in
+              let value1 = Capsule.Scoped.get scope1 ~f:(fun r -> !r) in
+              let value2 = Capsule.Scoped.get scope2 ~f:(fun r -> !r) in
               let new_value = Int.max value1 value2 in
-              Capsule.Guard.iter guard1 ~f:(fun r -> r := new_value);
-              Capsule.Guard.iter guard2 ~f:(fun r -> r := new_value) [@nontail])
+              Capsule.Scoped.iter scope1 ~f:(fun r -> r := new_value);
+              Capsule.Scoped.iter scope2 ~f:(fun r -> r := new_value) [@nontail])
             [@nontail])
           [@nontail]
         ;;
       ]} *)
-  val with_guard
+  val with_scoped
     : 'a ('b : value_or_null).
     Parallel_kernel.t @ local
     -> 'a t
-    -> f:(Parallel_kernel.t @ local -> 'a Capsule.Guard.t @ local -> 'b)
+    -> f:(Parallel_kernel.t @ local -> 'a Capsule.Scoped.t @ local -> 'b)
        @ local once unyielding
     -> 'b
 
-  (** [with_guard_or_cancel parallel c t ~f] is [Completed (with_guard parallel t ~f)] if
-      [c] is not canceled, otherwise it is [Canceled]. *)
-  val with_guard_or_cancel
+  (** [with_scoped_or_cancel parallel c t ~f] is [Completed (with_scoped parallel t ~f)]
+      if [c] is not canceled, otherwise it is [Canceled]. *)
+  val with_scoped_or_cancel
     : 'a ('b : value_or_null).
     Parallel_kernel.t @ local
     -> Cancellation.t @ local
     -> 'a t
-    -> f:(Parallel_kernel.t @ local -> 'a Capsule.Guard.t @ local -> 'b)
+    -> f:(Parallel_kernel.t @ local -> 'a Capsule.Scoped.t @ local -> 'b)
        @ local once unyielding
     -> 'b Or_canceled.t
 
@@ -548,7 +525,7 @@ module Rwlock : sig
       -> 'k t @ local
       -> f:
            (Parallel_kernel.t @ local
-            -> 'k Capsule.Expert.Password.Shared.t @ local
+            -> 'k Capsule.Expert.Password.Shared.t @ forkable local
             -> 'a @ unique)
          @ local once unyielding
       -> 'a @ unique
@@ -559,7 +536,7 @@ module Rwlock : sig
       -> 'k t @ local
       -> f:
            (Parallel_kernel.t @ local
-            -> 'k Capsule.Expert.Password.Shared.t @ local
+            -> 'k Capsule.Expert.Password.Shared.t @ forkable local
             -> 'a @ unique)
          @ local once unyielding
       -> 'a @ unique
@@ -571,7 +548,7 @@ module Rwlock : sig
       -> 'k t @ local
       -> f:
            (Parallel_kernel.t @ local
-            -> 'k Capsule.Expert.Password.Shared.t @ local
+            -> 'k Capsule.Expert.Password.Shared.t @ forkable local
             -> 'a @ unique)
          @ local once unyielding
       -> 'a Or_canceled.t @ unique
@@ -583,7 +560,7 @@ module Rwlock : sig
       -> 'k t @ local
       -> f:
            (Parallel_kernel.t @ local
-            -> 'k Capsule.Expert.Password.Shared.t @ local
+            -> 'k Capsule.Expert.Password.Shared.t @ forkable local
             -> 'a @ unique)
          @ local once unyielding
       -> 'a Or_canceled.t @ unique
@@ -637,51 +614,6 @@ module Rwlock : sig
     [%%template:
     [@@@alloc.default a @ l = (heap_global, stack_local)]
 
-    val with_key_shared
-      : ('a : value_or_null) 'k.
-      Parallel_kernel.t @ local
-      -> 'k t @ local
-      -> f:(Parallel_kernel.t @ local -> 'k Capsule.Expert.Key.t -> 'a @ l once unique)
-         @ local once unyielding
-      -> 'a @ l once unique
-
-    val with_key_shared_freezing
-      : ('a : value_or_null) 'k.
-      Parallel_kernel.t @ local
-      -> 'k t @ local
-      -> f:(Parallel_kernel.t @ local -> 'k Capsule.Expert.Key.t -> 'a @ l once unique)
-         @ local once unyielding
-      -> 'a @ l once unique
-
-    val with_key_shared_or_cancel
-      : ('a : value_or_null) 'k.
-      Parallel_kernel.t @ local
-      -> Cancellation.t @ local
-      -> 'k t @ local
-      -> f:(Parallel_kernel.t @ local -> 'k Capsule.Expert.Key.t -> 'a @ l once unique)
-         @ local once unyielding
-      -> 'a Or_canceled.t @ l once unique
-
-    val with_key_shared_or_cancel_freezing
-      : ('a : value_or_null) 'k.
-      Parallel_kernel.t @ local
-      -> Cancellation.t @ local
-      -> 'k t @ local
-      -> f:(Parallel_kernel.t @ local -> 'k Capsule.Expert.Key.t -> 'a @ l once unique)
-         @ local once unyielding
-      -> 'a Or_canceled.t @ l once unique
-
-    val with_key
-      : ('a : value_or_null) 'k.
-      Parallel_kernel.t @ local
-      -> 'k t @ local
-      -> f:
-           (Parallel_kernel.t @ local
-            -> 'k Capsule.Expert.Key.t @ unique
-            -> #('a * 'k Capsule.Expert.Key.t) @ l once unique)
-         @ local once unyielding
-      -> 'a @ l once unique
-
     val with_key_poisoning
       : ('a : value_or_null) 'k.
       Parallel_kernel.t @ local
@@ -692,18 +624,6 @@ module Rwlock : sig
             -> #('a * 'k Capsule.Expert.Key.t) @ l once unique)
          @ local once unyielding
       -> 'a @ l once unique
-
-    val with_key_or_cancel
-      : ('a : value_or_null) 'k.
-      Parallel_kernel.t @ local
-      -> Cancellation.t @ local
-      -> 'k t @ local
-      -> f:
-           (Parallel_kernel.t @ local
-            -> 'k Capsule.Expert.Key.t @ unique
-            -> #('a * 'k Capsule.Expert.Key.t) @ l once unique)
-         @ local once unyielding
-      -> 'a Or_canceled.t @ l once unique
 
     val with_key_or_cancel_poisoning
       : ('a : value_or_null) 'k.
@@ -744,29 +664,28 @@ module With_rwlock : sig
        @ local once portable unyielding
     -> 'b Or_canceled.t @ contended portable
 
-  (** [with_write_guard t ~f] locks the reader-writer lock associated with [t] for writing
-      and calls [f] with a [Guard.t] for the protected data, returning the result.
+  (** [with_scoped t ~f] locks the reader-writer lock associated with [t] for writing and
+      calls [f] with a [Scoped.t] for the protected data, returning the result.
 
       Since the provided callback does not have to be [portable], this is useful when you
       need to acquire two mutexes for different capsules at the same time and move data
-      between them. See {!With_mutex.with_guard} for an example. *)
-  val with_write_guard
+      between them. See {!With_mutex.with_scoped} for an example. *)
+  val with_scoped
     : 'a ('b : value_or_null).
     Parallel_kernel.t @ local
     -> 'a t
-    -> f:(Parallel_kernel.t @ local -> 'a Capsule.Guard.t @ local -> 'b)
+    -> f:(Parallel_kernel.t @ local -> 'a Capsule.Scoped.t @ local -> 'b)
        @ local once unyielding
     -> 'b
 
-  (** [with_write_guard_or_cancel parallel c t ~f] is
-      [Completed (with_write_guard parallel t ~f)] if [c] is not canceled, otherwise it is
-      [Canceled]. *)
-  val with_write_guard_or_cancel
+  (** [with_scoped_or_cancel parallel c t ~f] is [Completed (with_scoped parallel t ~f)]
+      if [c] is not canceled, otherwise it is [Canceled]. *)
+  val with_scoped_or_cancel
     : 'a ('b : value_or_null).
     Parallel_kernel.t @ local
     -> Cancellation.t @ local
     -> 'a t
-    -> f:(Parallel_kernel.t @ local -> 'a Capsule.Guard.t @ local -> 'b)
+    -> f:(Parallel_kernel.t @ local -> 'a Capsule.Scoped.t @ local -> 'b)
        @ local once unyielding
     -> 'b Or_canceled.t
 
@@ -791,6 +710,32 @@ module With_rwlock : sig
     -> f:(Parallel_kernel.t @ local -> 'a @ shared -> 'b @ contended portable)
        @ local once portable unyielding
     -> 'b Or_canceled.t @ contended portable
+
+  (** [with_scoped_shared t ~f] locks the reader-writer lock associated with [t] for
+      reading and calls [f] with a [Scoped.Shared.t] for the protected data, returning the
+      result.
+
+      [with_scope_shared] is similar to {!with_scoped}, but hands out a
+      {!Capsule.Scoped.Shared.t} *)
+  val with_scoped_shared
+    : ('a : value mod portable) ('b : value_or_null).
+    Parallel_kernel.t @ local
+    -> 'a t
+    -> f:(Parallel_kernel.t @ local -> 'a Capsule.Scoped.Shared.t @ forkable local -> 'b)
+       @ local once unyielding
+    -> 'b
+
+  (** [with_scoped_shared_or_cancel parallel c t ~f] is
+      [Completed (with_scoped_shared parallel t ~f)] if [c] is not canceled, otherwise it
+      is [Canceled]. *)
+  val with_scoped_shared_or_cancel
+    : ('a : value mod portable) ('b : value_or_null).
+    Parallel_kernel.t @ local
+    -> Cancellation.t @ local
+    -> 'a t
+    -> f:(Parallel_kernel.t @ local -> 'a Capsule.Scoped.Shared.t @ forkable local -> 'b)
+       @ local once unyielding
+    -> 'b Or_canceled.t
 
   (** Functions that poison or freeze the lock if the provided callback raises an
       exception. *)
@@ -823,32 +768,31 @@ module With_rwlock : sig
          @ local once portable unyielding
       -> 'b Or_canceled.t @ contended portable
 
-    (** [with_write_guard parallel t ~f] locks the reader-writer lock associated with [t]
-        for writing and calls [f] with a [Guard.t] for the protected value, returning the
+    (** [with_scoped parallel t ~f] locks the reader-writer lock associated with [t] for
+        writing and calls [f] with a [Scoped.t] for the protected value, returning the
         result.
 
         If [f] raises, [t] will be poisoned, meaning all subsequent attempts to acquire it
         will raise. *)
-    val with_write_guard
+    val with_scoped
       : 'a ('b : value_or_null).
       Parallel_kernel.t @ local
       -> 'a t
-      -> f:(Parallel_kernel.t @ local -> 'a Capsule.Guard.t @ local -> 'b)
+      -> f:(Parallel_kernel.t @ local -> 'a Capsule.Scoped.t @ local -> 'b)
          @ local once unyielding
       -> 'b
 
-    (** [with_write_guard_or_cancel parallel c t ~f] is
-        [Completed (with_write_guard parallel t ~f)] if [c] is not canceled, or [Canceled]
-        otherwise.
+    (** [with_scoped_or_cancel parallel c t ~f] is [Completed (with_scoped parallel t ~f)]
+        if [c] is not canceled, or [Canceled] otherwise.
 
         If [f] raises, [t] will be poisoned, meaning all subsequent attempts to acquire it
         will raise. *)
-    val with_write_guard_or_cancel
+    val with_scoped_or_cancel
       : 'a ('b : value_or_null).
       Parallel_kernel.t @ local
       -> Cancellation.t @ local
       -> 'a t
-      -> f:(Parallel_kernel.t @ local -> 'a Capsule.Guard.t @ local -> 'b)
+      -> f:(Parallel_kernel.t @ local -> 'a Capsule.Scoped.t @ local -> 'b)
          @ local once unyielding
       -> 'b Or_canceled.t
 
@@ -879,5 +823,40 @@ module With_rwlock : sig
       -> f:(Parallel_kernel.t @ local -> 'a @ shared -> 'b @ contended portable)
          @ local once portable unyielding
       -> 'b Or_canceled.t @ contended portable
+
+    (** [with_scoped_shared t ~f] locks the reader-writer lock associated with [t] for
+        reading and calls [f] with a [Scoped.Shared.t] for the protected data, returning
+        the result.
+
+        If [f] raises, [t] will be frozen, meaning all subsequent attempts to acquire it
+        for writing will raise. *)
+    val with_scoped_shared
+      : ('a : value mod portable) ('b : value_or_null).
+      Parallel_kernel.t @ local
+      -> 'a t
+      -> f:
+           (Parallel_kernel.t @ local
+            -> 'a Capsule.Scoped.Shared.t @ forkable local
+            -> 'b)
+         @ local once unyielding
+      -> 'b
+
+    (** [with_scoped_shared_or_cancel parallel c t ~f] is
+        [Completed (with_scoped_shared parallel t ~f)] if [c] is not canceled, otherwise
+        it is [Canceled].
+
+        If [f] raises, [t] will be frozen, meaning all subsequent attempts to acquire it
+        for writing will raise. *)
+    val with_scoped_shared_or_cancel
+      : ('a : value mod portable) ('b : value_or_null).
+      Parallel_kernel.t @ local
+      -> Cancellation.t @ local
+      -> 'a t
+      -> f:
+           (Parallel_kernel.t @ local
+            -> 'a Capsule.Scoped.Shared.t @ forkable local
+            -> 'b)
+         @ local once unyielding
+      -> 'b Or_canceled.t
   end
 end

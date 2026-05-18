@@ -27,8 +27,8 @@ module I64 = struct
   let of_int = Int64_u.of_int
 end
 
-module Bench_arrays (Scheduler : Parallel.Scheduler.S) = struct
-  let scheduler = Scheduler.create ~max_domains:Env.max_domains ()
+module Bench_arrays (Scheduler : Common.Scheduler) = struct
+  let parallel = Scheduler.parallel
 
   module%template Layout (Elem : sig
     @@ portable
@@ -48,7 +48,7 @@ module Bench_arrays (Scheduler : Parallel.Scheduler.S) = struct
 
     let%bench_fun "init" =
       fun () ->
-      Scheduler.parallel scheduler ~f:(fun parallel ->
+      Scheduler.parallel (fun parallel ->
         let _ : Elem.t Array.t =
           (Array.init [@kind k]) parallel Env.length ~f:(fun _ i -> Elem.of_int (i * 2))
         in
@@ -58,7 +58,7 @@ module Bench_arrays (Scheduler : Parallel.Scheduler.S) = struct
     let%bench_fun "iter" =
       let array = random () in
       fun () ->
-        Scheduler.parallel scheduler ~f:(fun parallel ->
+        parallel (fun parallel ->
           let array = Obj.magic_uncontended array |> Array.of_array in
           (Array.iter [@kind k]) parallel array ~f:(fun _ _ -> ()))
     ;;
@@ -66,7 +66,7 @@ module Bench_arrays (Scheduler : Parallel.Scheduler.S) = struct
     let%bench_fun "fold" =
       let array = random () in
       fun () ->
-        Scheduler.parallel scheduler ~f:(fun parallel ->
+        parallel (fun parallel ->
           let array = Obj.magic_uncontended array |> Array.of_array in
           let _ : int =
             (Array.fold [@kind k])
@@ -82,7 +82,7 @@ module Bench_arrays (Scheduler : Parallel.Scheduler.S) = struct
     let%bench_fun "find" =
       let array = random () in
       fun () ->
-        Scheduler.parallel scheduler ~f:(fun parallel ->
+        parallel (fun parallel ->
           let array = Obj.magic_uncontended array |> Array.of_array in
           let _ : (Elem.t Option_u.t[@kind k]) =
             (Array.find [@kind k]) parallel array ~f:(fun _ i ->
@@ -94,7 +94,7 @@ module Bench_arrays (Scheduler : Parallel.Scheduler.S) = struct
     let%bench_fun "map" =
       let array = random () in
       fun () ->
-        Scheduler.parallel scheduler ~f:(fun parallel ->
+        parallel (fun parallel ->
           let array = Obj.magic_uncontended array |> Array.of_array in
           let _ : Elem.t Array.t =
             (Array.map [@kind k k]) parallel array ~f:(fun _ i ->
@@ -106,7 +106,7 @@ module Bench_arrays (Scheduler : Parallel.Scheduler.S) = struct
     let%bench_fun "sort" =
       let array = random () in
       fun () ->
-        Scheduler.parallel scheduler ~f:(fun parallel ->
+        parallel (fun parallel ->
           let array = Obj.magic_uncontended array |> Array.of_array in
           let _ : Elem.t Array.t =
             (Array.sort [@kind k]) parallel array ~compare:(fun _ x y ->
@@ -118,7 +118,7 @@ module Bench_arrays (Scheduler : Parallel.Scheduler.S) = struct
     let%bench_fun "stable_sort" =
       let array = random () in
       fun () ->
-        Scheduler.parallel scheduler ~f:(fun parallel ->
+        parallel (fun parallel ->
           let array = Obj.magic_uncontended array |> Array.of_array in
           let _ : Elem.t Array.t =
             (Array.stable_sort [@kind k]) parallel array ~compare:(fun _ x y ->
@@ -130,7 +130,7 @@ module Bench_arrays (Scheduler : Parallel.Scheduler.S) = struct
     let%bench_fun "scan" =
       let array = random () in
       fun () ->
-        Scheduler.parallel scheduler ~f:(fun parallel ->
+        parallel (fun parallel ->
           let array = Obj.magic_uncontended array |> Array.of_array in
           let _ : #(Elem.t Array.t * Elem.t) =
             (Array.scan [@kind k]) parallel array ~init:(Elem.of_int 0) ~f:(fun _ a b ->
@@ -142,7 +142,7 @@ module Bench_arrays (Scheduler : Parallel.Scheduler.S) = struct
     let%bench_fun "scan_inclusive" =
       let array = random () in
       fun () ->
-        Scheduler.parallel scheduler ~f:(fun parallel ->
+        parallel (fun parallel ->
           let array = Obj.magic_uncontended array |> Array.of_array in
           let _ : Elem.t Array.t =
             (Array.scan_inclusive [@kind k])
@@ -157,7 +157,7 @@ module Bench_arrays (Scheduler : Parallel.Scheduler.S) = struct
     let%bench_fun "filter" =
       let array = random () in
       fun () ->
-        Scheduler.parallel scheduler ~f:(fun parallel ->
+        parallel (fun parallel ->
           let array = Obj.magic_uncontended array |> Array.of_array in
           let _ : Elem.t Array.t =
             (Array.filter [@kind k]) parallel array ~f:(fun _ i ->
@@ -169,7 +169,7 @@ module Bench_arrays (Scheduler : Parallel.Scheduler.S) = struct
     let%bench_fun "map_inplace" =
       let array = random () in
       fun () ->
-        Scheduler.parallel scheduler ~f:(fun parallel ->
+        parallel (fun parallel ->
           let array = Obj.magic_uncontended array |> Array.of_array in
           (Array.map_inplace [@kind k]) parallel array ~f:(fun _ i ->
             Elem.of_int (Elem.to_int i * 2)))
@@ -178,7 +178,7 @@ module Bench_arrays (Scheduler : Parallel.Scheduler.S) = struct
     let%bench_fun "sort_inplace" =
       let array = random () in
       fun () ->
-        Scheduler.parallel scheduler ~f:(fun parallel ->
+        parallel (fun parallel ->
           let array = Obj.magic_uncontended array |> Array.of_array in
           (Array.sort_inplace [@kind k]) parallel array ~compare:(fun _ x y ->
             Int.compare (Elem.to_int x) (Elem.to_int y)))
@@ -187,7 +187,7 @@ module Bench_arrays (Scheduler : Parallel.Scheduler.S) = struct
     let%bench_fun "stable_sort_inplace" =
       let array = random () in
       fun () ->
-        Scheduler.parallel scheduler ~f:(fun parallel ->
+        parallel (fun parallel ->
           let array = Obj.magic_uncontended array |> Array.of_array in
           (Array.stable_sort_inplace [@kind k]) parallel array ~compare:(fun _ x y ->
             Int.compare (Elem.to_int x) (Elem.to_int y)))
@@ -196,20 +196,20 @@ module Bench_arrays (Scheduler : Parallel.Scheduler.S) = struct
     let%bench_fun "scan_inplace" =
       let array = random () in
       fun () ->
-        Scheduler.parallel scheduler ~f:(fun parallel ->
+        parallel (fun parallel ->
           let array = Obj.magic_uncontended array |> Array.of_array in
           (Array.scan_inplace [@kind k])
             parallel
             array
             ~init:(Elem.of_int 0)
             ~f:(fun _ a b -> Elem.of_int (Elem.to_int a + Elem.to_int b))
-          |> Elem.to_int)
+          |> (ignore : Elem.t -> unit))
     ;;
 
     let%bench_fun "scan_inclusive_inplace" =
       let array = random () in
       fun () ->
-        Scheduler.parallel scheduler ~f:(fun parallel ->
+        parallel (fun parallel ->
           let array = Obj.magic_uncontended array |> Array.of_array in
           (Array.scan_inclusive_inplace [@kind k])
             parallel
@@ -226,7 +226,7 @@ module Bench_arrays (Scheduler : Parallel.Scheduler.S) = struct
   let%bench_fun "filter_map" =
     let array = random () in
     fun () ->
-      Scheduler.parallel scheduler ~f:(fun parallel ->
+      parallel (fun parallel ->
         let array = Obj.magic_uncontended array |> Array.of_array in
         let _ : int Array.t =
           Array.filter_map parallel array ~f:(fun _ i ->
@@ -236,5 +236,4 @@ module Bench_arrays (Scheduler : Parallel.Scheduler.S) = struct
   ;;
 end
 
-module%bench Bench_sequential = Bench_arrays (Parallel.Scheduler.Sequential)
-module%bench Bench_parallel = Bench_arrays (Parallel_scheduler)
+module%bench _ = Common.Bench_schedulers (Bench_arrays)

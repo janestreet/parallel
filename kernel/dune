@@ -4,7 +4,12 @@
   (names stack_pointer_stubs parallel_stubs))
  (name parallel_kernel)
  (public_name parallel.kernel)
- (libraries await base concurrent handled_effect unboxed.int64_u
-   unboxed.nativeint_u portable unboxed_datatypes unique)
+ (libraries await await.sync base handled_effect.raises_in_jsoo
+   unboxed.int64_u unboxed.nativeint_u portable unboxed_datatypes unique)
  (preprocess
-  (pps ppx_jane)))
+  (pps ppx_jane))
+ (js_of_ocaml
+  (javascript_files stack_pointer_stubs.js parallel_stubs.js))
+ (wasm_of_ocaml
+  (javascript_files stack_pointer_stubs.js parallel_stubs.js)
+  (wasm_files stack_pointer_stubs.wat parallel_stubs.wat)))

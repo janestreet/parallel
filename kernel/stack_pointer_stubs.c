@@ -23,23 +23,6 @@ CAMLweakdef value caml_ext_pointer_as_native_pointer(__attribute__((unused)) int
                    "should not be called from native code");
 }
 
-CAMLweakdef CAMLprim value caml_native_pointer_of_value_bytecode(__attribute__((unused))
-                                                                 value _) {
-  caml_fatal_error(
-      "caml_native_pointer_of_value_bytecode: the only bytecode backend we support is "
-      "JavaScript, which should not call this function");
-}
-
-CAMLweakdef CAMLprim value caml_native_pointer_to_value_bytecode(__attribute__((unused))
-                                                                 value _) {
-  caml_fatal_error(
-      "caml_native_pointer_to_value_bytecode: the only bytecode backend we support is "
-      "JavaScript, which should not call this function");
-}
-
-CAMLweakdef CAMLprim value
-caml_ext_pointer_as_native_pointer_bytecode(__attribute__((unused)) value _) {
-  caml_fatal_error(
-      "caml_ext_pointer_as_native_pointer_bytecode: the only bytecode "
-      "backend we support is JavaScript, which should not call this function");
+CAMLprim value parallel_stack_pointer_unsupported(__attribute__((unused)) value _) {
+  caml_fatal_error("Stack pointers are not supported in bytecode.");
 }

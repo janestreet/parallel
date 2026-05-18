@@ -1,7 +1,7 @@
 (library
  (name parallel_bench)
  (public_name parallel.bench)
- (libraries async concurrent unboxed.int64_u parallel parallel_async
-   parallel_scheduler portable threads unboxed_datatypes)
+ (libraries await concurrent concurrent.in_thread unboxed.int64_u parallel
+   parallel_scheduler portable unboxed_datatypes)
  (preprocess
   (pps ppx_jane)))

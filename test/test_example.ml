@@ -15,16 +15,10 @@ let rec fib parallel n =
     a + b
 ;;
 
-let fib_sequential n =
-  let scheduler = Parallel.Scheduler.Sequential.create () in
-  Parallel.Scheduler.Sequential.parallel scheduler ~f:(fun parallel ->
-    printf "%d" (fib parallel n))
-;;
+let fib_sequential n = printf "%d" (fib Parallel.sequential n)
 
 let fib_parallel n =
-  let scheduler = Parallel_scheduler.create () in
-  Parallel_scheduler.parallel scheduler ~f:(fun parallel -> printf "%d" (fib parallel n));
-  Parallel_scheduler.stop scheduler
+  Parallel_scheduler.with_parallel (fun parallel -> printf "%d" (fib parallel n))
 ;;
 
 (* $MDX part-end *)

@@ -77,9 +77,9 @@ let promotions queue ~(f : 'a. 'a promoter) =
 let promote queue ~(scheduler : Parallel_kernel0.Scheduler.t) =
   let promoted =
     promotions queue ~f:(fun job promise ~tokens ->
-      scheduler.#promote (Promise.try_fiber promise job ~scheduler ~tokens))
+      scheduler.#subtask (Promise.try_fiber promise job ~scheduler ~tokens))
   in
-  if promoted > 0 then scheduler.#wake ~n:promoted
+  if promoted > 0 then scheduler.#try_wake ~n:promoted
 ;;
 
 let[@inline] [@loop] rec node

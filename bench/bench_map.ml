@@ -5,6 +5,7 @@ module%bench _ : Parallel.Map.S = struct
   type ('key, 'cmp, 'fn) with_comparator = 'fn
 
   open struct
+    let parallel = Common.Parallel.parallel
     let ignore x = ignore (Sys.opaque_identity x : _)
 
     let rec fib = function
@@ -14,7 +15,6 @@ module%bench _ : Parallel.Map.S = struct
     ;;
 
     let work () = ignore (Sys.opaque_identity (fib 10) : int)
-    let scheduler = Parallel_scheduler.create ~max_domains:Env.max_domains ()
 
     let lazy_map1 =
       Lazy.from_fun (fun () ->
@@ -29,25 +29,24 @@ module%bench _ : Parallel.Map.S = struct
 
     let test_seq f =
       let map = force lazy_map1 in
-      fun () : unit -> Parallel_scheduler.parallel scheduler ~f:(fun _ -> f map)
+      fun () : unit -> parallel (fun _ -> f map)
     ;;
 
     let test_par f =
       let map = force lazy_map1 in
-      fun () : unit -> Parallel_scheduler.parallel scheduler ~f:(fun par -> f par map)
+      fun () : unit -> parallel (fun par -> f par map)
     ;;
 
     let test_seq2 f =
       let map1 = force lazy_map1 in
       let map2 = force lazy_map2 in
-      fun () : unit -> Parallel_scheduler.parallel scheduler ~f:(fun _ -> f map1 map2)
+      fun () : unit -> parallel (fun _ -> f map1 map2)
     ;;
 
     let test_par2 f =
       let map1 = force lazy_map1 in
       let map2 = force lazy_map2 in
-      fun () : unit ->
-        Parallel_scheduler.parallel scheduler ~f:(fun par -> f par map1 map2)
+      fun () : unit -> parallel (fun par -> f par map1 map2)
     ;;
   end
 

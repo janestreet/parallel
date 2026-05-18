@@ -128,31 +128,10 @@ module Mutex = struct
     [%%template
     [@@@alloc.default a @ l = (heap_global, stack_local)]
 
-    let with_key parallel t ~f =
-      (let parallel = magic_unyielding_parallel parallel in
-       (Sync.Mutex.with_key [@alloc a])
-         (Parallel_kernel.sync parallel)
-         t
-         ~f:(fun _sync key -> f parallel key [@exclave_if_stack a])
-       [@nontail])
-      [@exclave_if_stack a]
-    ;;
-
     let with_key_poisoning parallel t ~f =
       (let parallel = magic_unyielding_parallel parallel in
        (Sync.Mutex.with_key_poisoning [@alloc a])
          (Parallel_kernel.sync parallel)
-         t
-         ~f:(fun _sync key -> f parallel key [@exclave_if_stack a])
-       [@nontail])
-      [@exclave_if_stack a]
-    ;;
-
-    let with_key_or_cancel parallel cancellation t ~f =
-      (let parallel = magic_unyielding_parallel parallel in
-       (Sync.Mutex.with_key_or_cancel [@alloc a])
-         (Parallel_kernel.sync parallel)
-         cancellation
          t
          ~f:(fun _sync key -> f parallel key [@exclave_if_stack a])
        [@nontail])
@@ -192,22 +171,22 @@ module With_mutex = struct
     [@nontail]
   ;;
 
-  let with_guard parallel t ~f =
+  let with_scoped parallel t ~f =
     let parallel = magic_unyielding_parallel parallel in
-    Capsule.Sync.With_mutex.with_guard
+    Capsule.Sync.With_mutex.with_scoped
       (Parallel_kernel.sync parallel)
       t
-      ~f:(fun _ guard -> f parallel guard)
+      ~f:(fun _ scoped -> f parallel scoped)
     [@nontail]
   ;;
 
-  let with_guard_or_cancel parallel cancellation t ~f =
+  let with_scoped_or_cancel parallel cancellation t ~f =
     let parallel = magic_unyielding_parallel parallel in
-    Capsule.Sync.With_mutex.with_guard_or_cancel
+    Capsule.Sync.With_mutex.with_scoped_or_cancel
       (Parallel_kernel.sync parallel)
       cancellation
       t
-      ~f:(fun _ guard -> f parallel guard)
+      ~f:(fun _ scoped -> f parallel scoped)
     [@nontail]
   ;;
 
@@ -464,73 +443,10 @@ module Rwlock = struct
     [%%template
     [@@@alloc.default a @ l = (heap_global, stack_local)]
 
-    let with_key_shared parallel t ~f =
-      (let parallel = magic_unyielding_parallel parallel in
-       (Sync.Rwlock.with_key_shared [@alloc a])
-         (Parallel_kernel.sync parallel)
-         t
-         ~f:(fun _sync key -> f parallel key [@exclave_if_stack a])
-       [@nontail])
-      [@exclave_if_stack a]
-    ;;
-
-    let with_key_shared_freezing parallel t ~f =
-      (let parallel = magic_unyielding_parallel parallel in
-       (Sync.Rwlock.with_key_shared_freezing [@alloc a])
-         (Parallel_kernel.sync parallel)
-         t
-         ~f:(fun _sync key -> f parallel key [@exclave_if_stack a])
-       [@nontail])
-      [@exclave_if_stack a]
-    ;;
-
-    let with_key_shared_or_cancel parallel cancellation t ~f =
-      (let parallel = magic_unyielding_parallel parallel in
-       (Sync.Rwlock.with_key_shared_or_cancel [@alloc a])
-         (Parallel_kernel.sync parallel)
-         cancellation
-         t
-         ~f:(fun _sync key -> f parallel key [@exclave_if_stack a])
-       [@nontail])
-      [@exclave_if_stack a]
-    ;;
-
-    let with_key_shared_or_cancel_freezing parallel cancellation t ~f =
-      (let parallel = magic_unyielding_parallel parallel in
-       (Sync.Rwlock.with_key_shared_or_cancel_freezing [@alloc a])
-         (Parallel_kernel.sync parallel)
-         cancellation
-         t
-         ~f:(fun _sync key -> f parallel key [@exclave_if_stack a])
-       [@nontail])
-      [@exclave_if_stack a]
-    ;;
-
-    let with_key parallel t ~f =
-      (let parallel = magic_unyielding_parallel parallel in
-       (Sync.Rwlock.with_key [@alloc a])
-         (Parallel_kernel.sync parallel)
-         t
-         ~f:(fun _sync key -> f parallel key [@exclave_if_stack a])
-       [@nontail])
-      [@exclave_if_stack a]
-    ;;
-
     let with_key_poisoning parallel t ~f =
       (let parallel = magic_unyielding_parallel parallel in
        (Sync.Rwlock.with_key_poisoning [@alloc a])
          (Parallel_kernel.sync parallel)
-         t
-         ~f:(fun _sync key -> f parallel key [@exclave_if_stack a])
-       [@nontail])
-      [@exclave_if_stack a]
-    ;;
-
-    let with_key_or_cancel parallel cancellation t ~f =
-      (let parallel = magic_unyielding_parallel parallel in
-       (Sync.Rwlock.with_key_or_cancel [@alloc a])
-         (Parallel_kernel.sync parallel)
-         cancellation
          t
          ~f:(fun _sync key -> f parallel key [@exclave_if_stack a])
        [@nontail])
@@ -572,22 +488,22 @@ module With_rwlock = struct
     [@nontail]
   ;;
 
-  let with_write_guard parallel t ~f =
+  let with_scoped parallel t ~f =
     let parallel = magic_unyielding_parallel parallel in
-    Capsule.Sync.With_rwlock.with_write_guard
+    Capsule.Sync.With_rwlock.with_scoped
       (Parallel_kernel.sync parallel)
       t
-      ~f:(fun _ guard -> f parallel guard)
+      ~f:(fun _ scoped -> f parallel scoped)
     [@nontail]
   ;;
 
-  let with_write_guard_or_cancel parallel cancellation t ~f =
+  let with_scoped_or_cancel parallel cancellation t ~f =
     let parallel = magic_unyielding_parallel parallel in
-    Capsule.Sync.With_rwlock.with_write_guard_or_cancel
+    Capsule.Sync.With_rwlock.with_scoped_or_cancel
       (Parallel_kernel.sync parallel)
       cancellation
       t
-      ~f:(fun _ guard -> f parallel guard)
+      ~f:(fun _ scoped -> f parallel scoped)
     [@nontail]
   ;;
 
@@ -607,6 +523,25 @@ module With_rwlock = struct
       cancellation
       t
       ~f:(fun _ value -> f parallel value)
+    [@nontail]
+  ;;
+
+  let with_scoped_shared parallel t ~f =
+    let parallel = magic_unyielding_parallel parallel in
+    Capsule.Sync.With_rwlock.with_scoped_shared
+      (Parallel_kernel.sync parallel)
+      t
+      ~f:(fun _ scoped -> f parallel scoped)
+    [@nontail]
+  ;;
+
+  let with_scoped_shared_or_cancel parallel cancellation t ~f =
+    let parallel = magic_unyielding_parallel parallel in
+    Capsule.Sync.With_rwlock.with_scoped_shared_or_cancel
+      (Parallel_kernel.sync parallel)
+      cancellation
+      t
+      ~f:(fun _ scoped -> f parallel scoped)
     [@nontail]
   ;;
 
@@ -630,22 +565,22 @@ module With_rwlock = struct
       [@nontail]
     ;;
 
-    let with_write_guard parallel t ~f =
+    let with_scoped parallel t ~f =
       let parallel = magic_unyielding_parallel parallel in
-      Capsule.Sync.With_rwlock.Poisoning.with_write_guard
+      Capsule.Sync.With_rwlock.Poisoning.with_scoped
         (Parallel_kernel.sync parallel)
         t
-        ~f:(fun _ guard -> f parallel guard)
+        ~f:(fun _ scoped -> f parallel scoped)
       [@nontail]
     ;;
 
-    let with_write_guard_or_cancel parallel cancellation t ~f =
+    let with_scoped_or_cancel parallel cancellation t ~f =
       let parallel = magic_unyielding_parallel parallel in
-      Capsule.Sync.With_rwlock.Poisoning.with_write_guard_or_cancel
+      Capsule.Sync.With_rwlock.Poisoning.with_scoped_or_cancel
         (Parallel_kernel.sync parallel)
         cancellation
         t
-        ~f:(fun _ guard -> f parallel guard)
+        ~f:(fun _ scoped -> f parallel scoped)
       [@nontail]
     ;;
 
@@ -665,6 +600,25 @@ module With_rwlock = struct
         cancellation
         t
         ~f:(fun _ value -> f parallel value)
+      [@nontail]
+    ;;
+
+    let with_scoped_shared parallel t ~f =
+      let parallel = magic_unyielding_parallel parallel in
+      Capsule.Sync.With_rwlock.Poisoning.with_scoped_shared
+        (Parallel_kernel.sync parallel)
+        t
+        ~f:(fun _ scoped -> f parallel scoped)
+      [@nontail]
+    ;;
+
+    let with_scoped_shared_or_cancel parallel cancellation t ~f =
+      let parallel = magic_unyielding_parallel parallel in
+      Capsule.Sync.With_rwlock.Poisoning.with_scoped_shared_or_cancel
+        (Parallel_kernel.sync parallel)
+        cancellation
+        t
+        ~f:(fun _ scoped -> f parallel scoped)
       [@nontail]
     ;;
   end

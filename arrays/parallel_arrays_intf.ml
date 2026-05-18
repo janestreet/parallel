@@ -219,41 +219,6 @@ module type%template Map = sig @@ portable
       -> f:(Parallel_kernel.t @ local -> int -> 'a @ m -> 'b) @ shareable
       -> 'b t
   end
-
-  include sig
-    [@@@kind.default k1 = ks, k2 = ks, k3 = ks]
-    [@@@mode.default a = (uncontended, shared), b = (uncontended, shared)]
-
-    (** [map2_exn parallel t0 t1 ~f] initializes an array with the result of [f] applied
-        to each pair of elements of [t0, t1]. Raises if [t0] and [t1] do not have equal
-        lengths.
-
-        [f] is not allowed to return boxed floats, as this would break the float array
-        optimization. Prefer [float# t]. *)
-    val map2_exn
-      : ('a : k1 mod portable separable) ('b : k2 mod portable separable)
-        ('c : k3 mod non_float portable).
-      Parallel_kernel.t @ local
-      -> 'a t @ a
-      -> 'b t @ b
-      -> f:(Parallel_kernel.t @ local -> 'a @ a -> 'b @ b -> 'c) @ shareable
-      -> 'c t
-
-    (** [mapi2_exn parallel t0 t1 ~f] initializes an array with the result of [f] applied
-        to each pair of element of [t0, t1] and their index. Raises if [t0] and [t1] do
-        not have equal lengths.
-
-        [f] is not allowed to return boxed floats, as this would break the float array
-        optimization. Prefer [float# t]. *)
-    val mapi2_exn
-      : ('a : k1 mod portable separable) ('b : k2 mod portable separable)
-        ('c : k3 mod non_float portable).
-      Parallel_kernel.t @ local
-      -> 'a t @ a
-      -> 'b t @ b
-      -> f:(Parallel_kernel.t @ local -> int -> 'a @ a -> 'b @ b -> 'c) @ shareable
-      -> 'c t
-  end
 end
 [@@kind_set ks = (value_or_null, base_or_null)]
 

@@ -3,5 +3,6 @@
  (public_name parallel.arrays)
  (libraries base_bigstring unboxed.float32 parallel_kernel stdlib_stable
    unboxed_datatypes)
+ (ocamlopt_flags :standard -flambda2-join-algorithm n-way)
  (preprocess
   (pps ppx_jane)))

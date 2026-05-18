@@ -6,7 +6,7 @@ module Hlist = Hlist
 
 (** [t] is the type of implementations of parallelism. Operations that produce parallel
     tasks take a [t] that provides an implementation of parallelism for them to use. *)
-type t : value mod contended portable
+type t : value mod contended non_float portable
 
 (** A trivial implementation of parallelism that runs all tasks sequentially. *)
 val sequential : t
@@ -145,49 +145,52 @@ val%template fold
   acc = (base_or_null, value_or_null & base_or_null)
   , seq = (base_or_null, value_or_null & value_or_null)]
 
-module Scheduler : sig
-  module type S = Parallel_scheduler_intf.S with type parallel := t
-  module type S_concurrent = Parallel_scheduler_intf.S_concurrent with type parallel := t
+(** [heartbeat t ~n] allows [n] jobs to be promoted to parallel tasks. If there are fewer
+    than [n] tasks in the current queue, the remaining count will be used to eagerly
+    promote new tasks. If [n < 0], the next [n] promotions will be skipped. *)
+val heartbeat : t @ local -> n:int -> unit
 
-  (** A trivial scheduler that runs all parallel tasks sequentially. *)
-  module Sequential : S
-
-  (** [heartbeat t ~n] allows [n] jobs to be promoted to parallel tasks. If there are
-      fewer than [n] tasks in the current queue, the remaining count will be used to
-      eagerly promote new tasks. If [n < 0], the next [n] promotions will be skipped. *)
-  val heartbeat : t @ local -> n:int -> unit
-end
+module Lazy : Await_sync.Expert.Lazy.S with type capability := t
 
 module For_scheduler : sig
   module Result = Result
 
-  (** [root_exn f ~promote ~wake] creates a top-level, schedulable task representing the
-      full execution of [f]. The functions [f], [promote], and [wake] must not raise
-      exceptions. All schedulers must use [root_exn] to create the initial portable
-      function they inject into the worker pool.
+  (** [root_exn f ~task ~subtask ~try_wake] creates a top-level, schedulable task
+      representing the full execution of [f]. The functions [f], [task], [subtask], and
+      [wake] must not raise exceptions. All schedulers must use [root_exn] to create the
+      initial portable function they inject into the worker pool.
 
-      The functions [promote] and [wake] define the behavior of the scheduler. When the
-      heartbeat mechanism determines enough work has occurred to amortize promotion
-      overhead, it calls [promote], which gives the scheduler an opportunity to distribute
-      tasks to other domains. After promoting [n] tasks, [wake ~n] is called, which tells
-      the scheduler how many workers it may want to wake up. If a heartbeat occurs during
-      [promote] or [wake], they may be re-entered.
+      The functions [task], [subtask], and [try_wake] define the behavior of the
+      scheduler. When the heartbeat mechanism determines enough work has occurred to
+      amortize promotion overhead, it calls [subtask], which gives the scheduler an
+      opportunity to distribute subtasks to other domains. After promoting [n] subtasks,
+      [try_wake ~n] is called, which tells the scheduler how many workers it may want to
+      wake up. If a heartbeat occurs during [subtask] or [try_wake], they may be
+      re-entered. Tasks scheduled from outside the scheduler - and tasks that suspend
+      using [Await.await await] or [Await.yield await] - are passed to [task] when
+      signaled.
 
       @raise Out_of_fibers if unable to allocate a fiber. *)
   val root_exn
     :  unit Thunk.t @ once portable
-    -> promote:((unit -> unit) @ once portable -> unit) @ portable
-    -> wake:(n:int -> unit) @ portable
-    -> lazy_:bool
-         (** Whether the fiber should be lazily allocated by its executor. If the executor
-             is unable to allocate a fiber, it will raise an exception to top level. *)
+    -> task:((unit -> unit) @ once portable -> unit) @ portable
+    -> subtask:((unit -> unit) @ once portable -> unit) @ portable
+    -> try_wake:(n:int -> unit) @ portable
     -> (unit -> unit) @ once portable
 
+  (** [await t terminator] is an [Await.t] that suspends the current task and resubmits it
+      to the global queue when signaled. *)
+  val await : t @ local -> Terminator.t @ local -> Await.t @ local
+
   (** [with_heartbeat f] assures the heartbeat thread is running for the duration of [f]. *)
-  val with_heartbeat : (unit -> unit) @ local once -> unit
+  val with_heartbeat
+    : ('a : value_or_null).
+    (unit -> 'a @ once unique) @ local once -> 'a @ once unique
 
   (** [without_heartbeat f] masks heartbeats for the duration of [f]. *)
-  val without_heartbeat : ('a : value_or_null). (unit -> 'a) @ local once unyielding -> 'a
+  val without_heartbeat
+    : ('a : value_or_null).
+    (unit -> 'a @ once unique) @ local once unyielding -> 'a @ once unique
 end
 
 module For_testing : sig

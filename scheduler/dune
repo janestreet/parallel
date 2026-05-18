@@ -1,7 +1,7 @@
 (library
  (name parallel_scheduler)
  (public_name parallel.scheduler)
- (libraries await await.spinning base concurrent parallel_kernel portable
-   portable_ws_deque threads)
+ (libraries await base concurrent concurrent.in_thread parallel_kernel
+   portable portable_mpmc_queue portable_ws_deque threads)
  (preprocess
   (pps ppx_jane)))

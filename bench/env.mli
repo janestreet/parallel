@@ -2,8 +2,8 @@
 
 open! Base
 
-(** The maximum number of domains on which to run parallel tasks. *)
-val max_domains : int
+(** The maximum number of workers on which to run parallel tasks. *)
+val max_workers : int
 
 (** The length of arrays for parallel array benchmarks. *)
 val length : int

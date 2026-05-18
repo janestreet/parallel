@@ -1,0 +1,6 @@
+(library
+ (name parallel_test_jsoo)
+ (public_name parallel.test.jsoo)
+ (libraries core parallel unboxed_datatypes)
+ (preprocess
+  (pps ppx_jane)))

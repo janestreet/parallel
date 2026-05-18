@@ -56,17 +56,18 @@ let min_cost parallel (matrices : Matrix.t iarray) =
   aux parallel ~i:0 ~j:(Iarray.length matrices - 1)
 ;;
 
-let scheduler = Parallel_scheduler.create ()
+module Test_scheduler (Scheduler : Common.Scheduler) = struct
+  let%expect_test "concurrency overload" =
+    let matrices =
+      let heights = Iarray.init 100 ~f:(fun i -> (i % 10) + 1) in
+      Iarray.init 100 ~f:(fun i : Matrix.t ->
+        if i = 0
+        then { width = 10; height = heights.:(i) }
+        else { width = heights.:(i - 1); height = heights.:(i) })
+    in
+    Scheduler.parallel (fun parallel -> printf "%d\n" (min_cost parallel matrices));
+    [%expect {| 3408 |}]
+  ;;
+end
 
-let%expect_test "concurrency overload" =
-  let matrices =
-    let heights = Iarray.init 100 ~f:(fun i -> (i % 10) + 1) in
-    Iarray.init 100 ~f:(fun i : Matrix.t ->
-      if i = 0
-      then { width = 10; height = heights.:(i) }
-      else { width = heights.:(i - 1); height = heights.:(i) })
-  in
-  Parallel_scheduler.parallel scheduler ~f:(fun parallel ->
-    printf "%d\n" (min_cost parallel matrices));
-  [%expect {| 3408 |}]
-;;
+include Common.Test_schedulers (Test_scheduler)

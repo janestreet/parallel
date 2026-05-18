@@ -9,25 +9,25 @@ let rec fib n =
 
 let work _ _ = fib 10
 
-module Bench_seqs (Scheduler : Parallel.Scheduler.S) = struct
-  let scheduler = Scheduler.create ~max_domains:Env.max_domains ()
+module Bench_seqs (Scheduler : Common.Scheduler) = struct
+  let parallel = Scheduler.parallel
 
   let%bench "work-balanced" =
-    Scheduler.parallel scheduler ~f:(fun parallel ->
+    parallel (fun parallel ->
       let ints = Sequence.init 10_000 ~f:work in
       let _ : _ = Sequence.to_iarray parallel ints in
       ())
   ;;
 
   let%bench "work-fib" =
-    Scheduler.parallel scheduler ~f:(fun parallel ->
+    parallel (fun parallel ->
       let ints = Sequence.init 40 ~f:(fun _ i -> fib i) in
       let _ : _ = Sequence.to_iarray parallel ints in
       ())
   ;;
 
   let%bench "concat-balanced" =
-    Scheduler.parallel scheduler ~f:(fun parallel ->
+    parallel (fun parallel ->
       let ints = Sequence.range 0 500 in
       let ints =
         Sequence.concat_map ints ~f:(fun _ _ ->
@@ -39,7 +39,7 @@ module Bench_seqs (Scheduler : Parallel.Scheduler.S) = struct
   ;;
 
   let%bench "concat-outer" =
-    Scheduler.parallel scheduler ~f:(fun parallel ->
+    parallel (fun parallel ->
       let ints = Sequence.range 0 5000 in
       let ints =
         Sequence.concat_map ints ~f:(fun _ _ ->
@@ -51,7 +51,7 @@ module Bench_seqs (Scheduler : Parallel.Scheduler.S) = struct
   ;;
 
   let%bench "concat-inner" =
-    Scheduler.parallel scheduler ~f:(fun parallel ->
+    parallel (fun parallel ->
       let ints = Sequence.range 0 50 in
       let ints =
         Sequence.concat_map ints ~f:(fun _ _ ->
@@ -63,7 +63,7 @@ module Bench_seqs (Scheduler : Parallel.Scheduler.S) = struct
   ;;
 
   let%bench "concat-fib" =
-    Scheduler.parallel scheduler ~f:(fun parallel ->
+    parallel (fun parallel ->
       let ints = Sequence.range 0 30 in
       let ints =
         Sequence.concat_map ints ~f:(fun _ i ->
@@ -75,11 +75,10 @@ module Bench_seqs (Scheduler : Parallel.Scheduler.S) = struct
   ;;
 
   let%bench "pseq_fast_parfor" =
-    Scheduler.parallel scheduler ~f:(fun parallel ->
+    parallel (fun parallel ->
       let ints = Sequence.range 0 1_000_000 in
       Sequence.iter parallel ints ~f:(fun _ _ -> ()) [@nontail])
   ;;
 end
 
-module%bench Bench_sequential = Bench_seqs (Parallel.Scheduler.Sequential)
-module%bench Bench_parallel = Bench_seqs (Parallel_scheduler)
+module%bench _ = Common.Bench_schedulers (Bench_seqs)

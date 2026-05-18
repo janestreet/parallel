@@ -25,7 +25,7 @@ let%template[@inline] wrap
     only uncontended reference to the array and its contents. *)
 
 module%template
-  [@warning "-32"] Make_init (Array : sig
+  [@warning "-32"] [@inline] Make_init (Array : sig
   @@ portable
     type ('a : any mod portable separable) t
     type ('a : any mod portable separable) mut : mutable_data with 'a
@@ -68,7 +68,8 @@ end
 module _ = Make_init [@modality non_float]
 module _ = Make_init [@modality separable] [@kind_set base_or_null]
 
-module%template Make_inplace (Array : sig
+module%template
+  [@inline] Make_inplace (Array : sig
   @@ portable
     type ('a : any mod portable separable) t : mutable_data with 'a
 
@@ -781,7 +782,8 @@ struct
 end
 [@@kind_set ks = (value_or_null, base_or_null)]
 
-module%template Make_map (Array : sig
+module%template
+  [@inline] Make_map (Array : sig
   @@ portable
     type ('a : any mod portable separable) t
     type ('a : any mod portable separable) mut : mutable_data with 'a
@@ -834,52 +836,11 @@ struct
         ~f:((wrap [@kind k1 k2]) ~f) [@nontail]
     ;;
   end
-
-  include struct
-    [@@@kind.default k1 = ks, k2 = ks, k3 = ks]
-
-    let mapi2_exn_gen parallel input0 input1 ~f =
-      let length0 = (Array.length [@kind k1]) input0 in
-      let length1 = (Array.length [@kind k2]) input1 in
-      if length0 <> length1 then invalid_arg "mismatched lengths";
-      if length0 = 0
-      then (Array.empty [@kind k3]) ()
-      else (
-        (* Safe because we initialize every index before it can be read. *)
-        let output = (Array.unsafe_create_uninitialized [@kind k3]) length0 in
-        let f parallel i =
-          let a =
-            (Array.unsafe_racy_get_contended [@kind k1]) input0 i |> Obj.magic_uncontended
-          in
-          let b =
-            (Array.unsafe_racy_get_contended [@kind k2]) input1 i |> Obj.magic_uncontended
-          in
-          let c = f parallel i a b in
-          (Array.unsafe_racy_set_contended [@kind k3]) output i c
-        in
-        Parallel_kernel.for_ parallel ~start:0 ~stop:length0 ~f;
-        (Array.freeze [@kind k3]) output)
-    ;;
-
-    [@@@mode.default a = (uncontended, shared), b = (uncontended, shared)]
-
-    let mapi2_exn parallel input0 input1 ~f =
-      (mapi2_exn_gen [@kind k1 k2 k3]) parallel input0 input1 ~f
-    ;;
-
-    let[@inline] map2_exn parallel input0 input1 ~f =
-      (mapi2_exn [@kind k1 k2 k3])
-        parallel
-        input0
-        input1
-        ~f:(fun [@inline] parallel _ a b -> f parallel a b)
-      [@nontail]
-    ;;
-  end
 end
 [@@kind_set ks = base_or_null]
 
-module%template Make_reduce (Array : sig
+module%template
+  [@inline] Make_reduce (Array : sig
   @@ portable
     type ('a : any mod portable separable) t
 
@@ -1050,7 +1011,8 @@ struct
 end
 [@@kind_set ks = (value_or_null, base_or_null)]
 
-module%template Make_sort (Array : sig
+module%template
+  [@inline] Make_sort (Array : sig
   @@ portable
     type ('a : any mod portable separable) t
     type ('a : any mod portable separable) mut : mutable_data with 'a
@@ -1126,7 +1088,8 @@ struct
 end
 [@@kind_set ks = (value_or_null, base_or_null)]
 
-module%template Make_scan (Array : sig
+module%template
+  [@inline] Make_scan (Array : sig
   @@ portable
     type ('a : any mod portable separable) t
     type ('a : any mod portable separable) mut : mutable_data with 'a
@@ -1283,7 +1246,7 @@ module Ints = struct
 
     let zero = 0l
     let one = 1l
-    let max_int = Int32.max_value |> Int32.to_int_exn
+    let max_int = Int32.max_value |> Int32.to_int_trunc
     let not_eq = Int32.( <> )
     let to_int_exn = Int32.to_int_exn
     let add = [%eta2 Int32.( + )]
@@ -1294,14 +1257,15 @@ module Ints = struct
 
     let zero = 0L
     let one = 1L
-    let max_int = Int.max_value
+    let max_int = Int64.max_value |> Int64.to_int_trunc
     let not_eq = Int64.( <> )
     let to_int_exn = Int64.to_int_exn
     let add = [%eta2 Int64.( + )]
   end
 end
 
-module%template Make_filter (Array : sig
+module%template
+  [@inline] Make_filter (Array : sig
   @@ portable
     type ('a : any mod portable separable) t
     type ('a : any mod portable separable) mut : mutable_data with 'a
@@ -1396,7 +1360,8 @@ struct
 end
 [@@kind_set ks = (value_or_null, base_or_null)]
 
-module%template Make_filter_map (Array : sig
+module%template
+  [@inline] Make_filter_map (Array : sig
   @@ portable
     type ('a : any mod portable separable) t
 
@@ -1436,7 +1401,8 @@ end
 
 module%template
   (* The [immutable_data]/[value_or_null] case will be used for [Ibigstring]/[Ibigarray]. *)
-  [@warning "-unused-value-declaration"] Make_slice (Array : sig
+  [@warning "-unused-value-declaration"]
+  [@inline] Make_slice (Array : sig
   @@ portable
     type ('a : any mod portable separable) t : s with 'a
 
@@ -1526,7 +1492,8 @@ end
 [@@kind s = (mutable_data, immutable_data)]
 [@@kind_set ks = (value_or_null, base_or_null)]
 
-module%template Make_islice (Array : sig
+module%template
+  [@inline] Make_islice (Array : sig
   @@ portable
     type ('a : any mod portable separable) t : immutable_data with 'a
 
@@ -1543,7 +1510,8 @@ struct
 end
 [@@kind_set ks = base_or_null]
 
-module%template Make_slice (Array : sig
+module%template
+  [@inline] Make_slice (Array : sig
   @@ portable
     type ('a : any mod portable separable) t : mutable_data with 'a
 

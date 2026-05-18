@@ -1,263 +1,239 @@
 open! Base
 open Await
-open Parallel_kernel
-module Atomic = Portable.Atomic
-module Sequential = Scheduler.Sequential
-module Scheduler = For_scheduler
-module Result = Scheduler.Result.Capsule
-
-(* Given N total domains, queue 0 is used by the initial domain and queues 1..N-1 are used
-   by worker domains. *)
-type t =
-  | Single_domain of
-      { sequential : Sequential.t
-      ; threads : int Atomic.t
-      }
-  | Multi_domain of
-      { queues : Work_deqs.t
-      ; stop : bool Atomic.t
-      ; stopped : Await.Countdown_latch.t
-      }
-
-let is_stopped = function
-  | Single_domain { sequential; _ } -> Sequential.is_stopped sequential
-  | Multi_domain { stop; _ } -> Atomic.get stop
-;;
-
-let stop t =
-  if is_stopped t then failwith "The scheduler is already stopped";
-  match t with
-  | Single_domain { sequential; threads } ->
-    while Atomic.get threads > 0 do
-      Thread.yield ()
-    done;
-    Sequential.stop sequential
-  | Multi_domain { queues; stop; stopped } ->
-    Work_deqs.work queues ~break:(fun () -> true);
-    Atomic.set stop true;
-    for i = 1 to Work_deqs.length queues - 1 do
-      Work_deqs.wake queues ~idx:i
-    done;
-    Await.Countdown_latch.decr stopped;
-    Await.Countdown_latch.await
-      ((Await.Expert.create [@alloc stack])
-         ~sync:Sync.blocking
-         ~terminator:Terminator.never)
-      stopped [@nontail]
-;;
-
-let create ?max_domains () =
-  let domains =
-    let default = Multicore.max_domains () in
-    Option.value_map max_domains ~f:(Int.min default) ~default
-  in
-  if domains < 1 then invalid_arg "Parallel_scheduler.create";
-  match domains with
-  | 1 -> Single_domain { sequential = Sequential.create (); threads = Atomic.make 0 }
-  | _ ->
-    let stop_flag = Atomic.make false in
-    let queues = Work_deqs.create ~domains in
-    let stopped = Await.Countdown_latch.create 1 in
-    let t = Multi_domain { queues; stop = stop_flag; stopped } in
-    (* [create] is [nonportable], so we are on domain 0. *)
-    for idx = 1 to domains - 1 do
-      Await.Countdown_latch.incr stopped;
-      match
-        Multicore.spawn_on
-          ~domain:idx
-          (fun () ->
-            Work_deqs.work queues ~break:(fun () -> Atomic.get stop_flag);
-            Await.Countdown_latch.decr stopped)
-          ()
-      with
-      | Spawned ->
-        ( (* The new thread is now responsible for decrementing the [stopped] latch. *) )
-      | Failed ((), exn, bt) ->
-        Await.Countdown_latch.decr stopped;
-        stop t;
-        Exn.raise_with_original_backtrace exn bt
-    done;
-    t
-;;
-
-let parallel t ~f =
-  let open struct
-    external require_forkable_shareable
-      :  ('a[@local_opt]) @ forkable once shareable
-      -> ('a[@local_opt]) @ forkable once portable
-      @@ portable
-      = "%identity"
-  end in
-  if is_stopped t then failwith "The scheduler is already stopped";
-  (* SAFETY: this is sound because [f] is [forkable shareable], our caller is blocked
-     until [f] completes, and [f] does not escape its scope. *)
-  let f = require_forkable_shareable f in
-  match t with
-  | Single_domain { sequential; _ } -> Sequential.parallel sequential ~f
-  | Multi_domain { queues; _ } ->
-    let promote job = Work_deqs.push queues job in
-    let wake ~n = Work_deqs.try_wake queues ~n in
-    let result = Await.Mvar.create () in
-    let root =
-      Scheduler.root_exn ~promote ~wake ~lazy_:false (fun parallel ->
-        let res = Result.try_with (fun () -> f parallel) in
-        Await.Mvar.put_exn result { many = Result.globalize res };
-        Work_deqs.wake queues ~idx:0)
-    in
-    Work_deqs.push queues root;
-    Scheduler.with_heartbeat (fun () ->
-      Work_deqs.work queues ~break:(fun () -> Await.Mvar.is_full result) [@nontail]);
-    Result.unwrap_ok_exn
-      (Await.Mvar.take
-         ((Await.Expert.create [@alloc stack])
-            ~sync:Sync.blocking
-            ~terminator:Terminator.never)
-         result)
-        .many [@nontail]
-;;
+module Scheduler = Parallel_kernel.For_scheduler
+module Result = Scheduler.Result
 
 module Spawn = struct
   type t =
     { create : Await.t @ local -> Parallel_kernel.t Concurrent.t @ local portable
       @@ global
-    ; spawn : 'r 'a. ('r, 'a, Parallel_kernel.t) Concurrent.Scheduler.spawn_fn @@ global
+    ; spawn :
+        ('r : value_or_null) 'a. ('r, 'a, Parallel_kernel.t) Concurrent.Scheduler.spawn_fn
+      @@ global
     }
 
-  let thread ~threads =
-    let spawn_thread r f ~threads : _ Concurrent.spawn_result =
-      Atomic.incr threads;
-      match
-        (* [create] is [nonportable], so we are on domain 0. *)
-        Multicore.spawn_on
-          ~domain:0
-          (fun r ->
-            Exn.protect
-              ~f:(fun () ->
-                let scheduler = Sequential.create () in
-                Sequential.parallel scheduler ~f:(fun c -> f c r))
-              ~finally:(fun () -> Atomic.decr threads) [@nontail])
-          r
-      with
-      | Spawned -> Spawned
-      | Failed (r, exn, bt) ->
-        Atomic.decr threads;
-        Failed (r, exn, bt)
-    in
-    let rec spawn : type r a. (r, a, Parallel_kernel.t) Concurrent.Scheduler.spawn_fn =
-      fun scope #{ fn; affinity = _; name = _ } r ->
-      let token = Concurrent.Scope.add scope in
-      spawn_thread ~threads r (fun parallel r ->
-        Concurrent.Scope.Token.use token ~f:(fun [@inline] terminator scope ->
-          with_concurrent terminator ~f:(fun [@inline] c -> fn scope parallel c r)
-          [@nontail])
-        [@nontail])
+  let thread =
+    let rec spawn
+      : type (r : value_or_null) a.
+        (r, a, Parallel_kernel.t) Concurrent.Scheduler.spawn_fn
+      =
+      fun scope #{ fn; name; affinity } resource ->
+      let task =
+        #{ Concurrent.Task.fn =
+             (fun scope () concurrent -> exclave_
+               fn scope Parallel_kernel.sequential (create (Concurrent.await concurrent)))
+         ; name
+         ; affinity
+         }
+      in
+      Concurrent_in_thread.scheduler.spawn scope task resource
     and create await = exclave_
       (Concurrent.create [@mode portable])
         await
         ~scheduler:((Concurrent.Scheduler.create [@mode portable] [@alloc stack]) ~spawn)
-    and with_concurrent terminator ~f =
-      f
-        (create ((Await.Expert.create [@alloc stack]) ~sync:Sync.blocking ~terminator))
-      [@nontail]
     in
-    exclave_ { create; spawn }
+    { create; spawn }
   ;;
 
-  let fiber ~queues ~lazy_ =
-    let spawn_fiber r f ~queues =
-      let promote job = Work_deqs.push queues job in
-      let wake ~n = Work_deqs.try_wake queues ~n in
-      (* SAFETY: [r] is either consumed by [f] or returned via [Failed]. *)
-      let r = (Obj.magic_many [@mode contended portable unique]) r in
-      let f parallel =
-        let r = (Obj.magic_unique [@mode contended portable]) r in
-        f parallel r
-      in
-      match Scheduler.root_exn f ~promote ~wake ~lazy_ with
-      | root ->
-        Work_deqs.push queues root;
-        Work_deqs.wake_one queues;
-        Concurrent.Spawned
-      | exception (Out_of_fibers as exn) ->
-        (* SAFETY: see above *)
-        let r = (Obj.magic_unique [@mode contended portable]) r in
-        let bt = Backtrace.Exn.most_recent () in
-        Concurrent.Failed (r, exn, bt)
+  let inject ~task ~subtask ~try_wake f r =
+    (* SAFETY: [r] is either consumed by [f] or returned via [Failed]. *)
+    let r = (Obj.magic_many [@mode contended portable unique]) r in
+    let f parallel =
+      let r = (Obj.magic_unique [@mode contended portable]) r in
+      f parallel r
     in
-    let rec spawn : type r a. (r, a, Parallel_kernel.t) Concurrent.Scheduler.spawn_fn =
+    match Scheduler.root_exn f ~task ~subtask ~try_wake with
+    | root ->
+      task root;
+      Concurrent.Spawned
+    | exception (Out_of_fibers as exn) ->
+      (* SAFETY: see above *)
+      let r = (Obj.magic_unique [@mode contended portable]) r in
+      let bt = Backtrace.Exn.most_recent () in
+      Concurrent.Failed (r, exn, bt)
+  ;;
+
+  let fiber ~queues =
+    let task f = Work_deqs.inject queues f in
+    let subtask f = Work_deqs.push queues f in
+    let try_wake ~n = Work_deqs.try_wake queues ~n in
+    let rec spawn
+      : type (r : value_or_null) a.
+        (r, a, Parallel_kernel.t) Concurrent.Scheduler.spawn_fn
+      =
       fun scope #{ fn; affinity = _; name = _ } r ->
-      let token = Concurrent.Scope.add scope in
-      spawn_fiber ~queues r (fun parallel r ->
-        Concurrent.Scope.Token.use token ~f:(fun [@inline] terminator scope ->
-          with_concurrent parallel terminator ~f:(fun [@inline] c ->
-            fn scope parallel c r)
-          [@nontail])
-        [@nontail])
+      match
+        inject
+          ~task
+          ~subtask
+          ~try_wake
+          (fun parallel (token, r) ->
+            Concurrent.Scope.Token.use token ~f:(fun [@inline] terminator scope ->
+              let await = Scheduler.await parallel terminator in
+              fn scope parallel (create await) r [@nontail])
+            [@nontail])
+          (Concurrent.Scope.add scope, r)
+      with
+      | Spawned -> Spawned
+      | Failed ((token, r), exn, bt) ->
+        Concurrent.Scope.Token.drop token;
+        Failed (r, exn, bt)
     and create await = exclave_
       (Concurrent.create [@mode portable])
         await
         ~scheduler:((Concurrent.Scheduler.create [@mode portable] [@alloc stack]) ~spawn)
-    and with_concurrent parallel terminator ~f =
-      let await =
-        (Await.Expert.create [@alloc stack])
-          ~sync:(Parallel_kernel.sync parallel)
-          ~terminator
-      in
-      f (create await) [@nontail]
     in
     exclave_ { create; spawn }
   ;;
 end
 
-let concurrent t ~terminator ~f =
-  if is_stopped t then failwith "The scheduler is already stopped";
-  let terminator = Terminator.Expert.globalize terminator in
-  match t with
-  | Single_domain { threads; _ } ->
-    let%tydi { create; _ } = Spawn.thread ~threads in
-    parallel t ~f:(fun _ ->
-      f
-        (create ((Await.Expert.create [@alloc stack]) ~sync:Sync.blocking ~terminator))
-      [@nontail])
-  | Multi_domain { queues; _ } ->
-    let%tydi { create; _ } = Spawn.fiber ~queues ~lazy_:false in
-    parallel t ~f:(fun parallel ->
-      f
-        (create
-           ((Await.Expert.create [@alloc stack])
-              ~sync:(Parallel_kernel.sync parallel)
-              ~terminator)) [@nontail])
+let workers ~max_workers =
+  let workers =
+    let default = Multicore.max_domains () in
+    Option.value_map max_workers ~f:(Int.min default) ~default
+  in
+  if workers < 1 then invalid_arg "Parallel_scheduler: workers < 1";
+  workers
 ;;
 
-module Expert = struct
-  let lazy_ =
-    (* If set, running out of fibers will crash the program. *)
-    match Sys.getenv "PARALLEL_SCHEDULER_LAZY_ASYNC_FIBERS" with
-    | Some "true" -> true
-    | _ -> false
-  ;;
+let spawn_workers ~workers ~queues ~on_root scope =
+  let task i =
+    Concurrent.task
+      ~name:[%string "Par_sched:%{i#Int}"]
+      ~affinity:i
+      (fun _ cancellation _ concurrent ->
+         assert (Multicore.current_domain () = i);
+         Work_deqs.work
+           queues
+           ~await:(Concurrent.await concurrent)
+           ~cancellation [@nontail])
+  in
+  (Option.iter [@mode local]) on_root ~f:(fun on_root ->
+    Concurrent.Scheduler.spawn_daemon' on_root scope (task 0));
+  for i = 1 to workers - 1 do
+    Concurrent.Scheduler.spawn_daemon' Concurrent_in_thread.scheduler scope (task i)
+  done
+;;
 
-  let scheduler t =
-    match t with
-    | Single_domain { threads; _ } ->
-      let%tydi { spawn; _ } = Spawn.thread ~threads in
-      Concurrent.Scheduler.create ~spawn:(fun scope task r ->
-        if is_stopped t then failwith "The scheduler is already stopped";
-        spawn scope task r)
-    | Multi_domain { queues; _ } ->
-      (* Each task must request heartbeats since they do not have an outer scope. *)
-      let%tydi { spawn; _ } = Spawn.fiber ~queues ~lazy_ in
-      Concurrent.Scheduler.create ~spawn:(fun scope #{ fn; affinity; name } r ->
-        if is_stopped t then failwith "The scheduler is already stopped";
+let with_workers ~workers ~on_root await f =
+  let queues = Work_deqs.create ~workers in
+  let%tydi { create; _ } = Spawn.fiber ~queues in
+  (* When this scope returns, we know all queues are empty, so we may cancel the workers. *)
+  (Concurrent.Scope.with_ await () ~f:(fun await scope ->
+     spawn_workers ~workers ~queues ~on_root scope;
+     let concurrent = create await in
+     { many = f concurrent }))
+    .many
+;;
+
+let with_parallel ?max_workers f =
+  (* SAFETY: this is sound because our caller is blocked until [f] completes and [f] does
+     not escape its scope. *)
+  let f = (Obj.magic_portable [@mode once]) f in
+  match workers ~max_workers with
+  | 1 -> f Parallel_kernel.sequential
+  | workers ->
+    (* [f] is [unyielding], so returns in bounded time. Therefore, blocking the current
+       thread and becoming unkillable cannot cause deadlocks. *)
+    let await =
+      (Await.Expert.create [@alloc stack])
+        ~sync:Sync.blocking
+        ~terminator:Terminator.unkillable
+    in
+    with_workers
+      ~workers
+      ~on_root:(Some Concurrent_in_thread.scheduler)
+      await
+      (fun concurrent ->
+         (Concurrent.spawn_join [@mode unique]) concurrent () ~f:(fun _ parallel _ ->
+           Result.Capsule.globalize
+             (Result.Capsule.try_with (fun () ->
+                (Scheduler.with_heartbeat (fun () -> { aliased_many = f parallel }))
+                  .aliased_many)) [@nontail])
+         [@nontail])
+    |> Result.Capsule.unwrap_ok_exn
+;;
+
+let with_concurrent ?max_workers f =
+  (* [f] is [unyielding], so returns in bounded time. Therefore, blocking the current
+     thread and becoming unkillable cannot cause deadlocks. *)
+  let await =
+    (Await.Expert.create [@alloc stack])
+      ~sync:Sync.blocking
+      ~terminator:Terminator.unkillable
+  in
+  match workers ~max_workers with
+  | 1 when not (Basement.Stdlib_shim.runtime5 ()) ->
+    let%tydi { create; _ } = Spawn.thread in
+    f (create await) [@nontail]
+  | workers ->
+    with_workers
+      ~workers
+      ~on_root:(Some Concurrent_in_thread.scheduler)
+      await
+      (fun concurrent ->
+         Result.globalize
+           (Result.try_with (fun () ->
+              (Scheduler.with_heartbeat (fun () -> { aliased_many = f concurrent }))
+                .aliased_many)) [@nontail])
+    |> Result.ok_exn
+;;
+
+let scheduler ?max_workers ?on_root () =
+  match workers ~max_workers with
+  | 1 when not (Basement.Stdlib_shim.runtime5 ()) ->
+    let%tydi { spawn; _ } = Spawn.thread in
+    (Concurrent.Scheduler.create [@mode portable]) ~spawn
+  | workers ->
+    let workers, on_root =
+      match workers, on_root with
+      | n, None when Multicore.max_domains () > n -> n + 1, None
+      | _ -> workers, on_root
+    in
+    let queues = Work_deqs.create ~workers in
+    let%tydi { spawn; _ } = Spawn.fiber ~queues in
+    let scope = Concurrent.Scope.Global.create () ~on_exit:(fun _ _ -> ()) in
+    (match workers, on_root with
+     | 1, None ->
+       spawn_workers ~workers ~queues ~on_root:(Some Concurrent_in_thread.scheduler) scope
+     | _ -> spawn_workers ~workers ~queues ~on_root scope);
+    (Concurrent.Scheduler.create [@mode portable])
+      ~spawn:(fun scope #{ fn; affinity; name } r ->
         spawn
           scope
           #{ fn =
                (fun scope ctx concurrent r ->
+                 (* We do not have an enclosing scope, so we must request heartbeats. *)
                  Scheduler.with_heartbeat (fun () -> fn scope ctx concurrent r [@nontail])
                  [@nontail])
            ; affinity
            ; name
            }
           r)
-  ;;
-end
+;;
+
+let concurrent scheduler await f =
+  let concurrent = (Concurrent.create [@mode portable]) await ~scheduler in
+  f concurrent [@nontail]
+;;
+
+let parallel scheduler f =
+  (* SAFETY: this is sound because our caller is blocked until [f] completes and [f] does
+     not escape its scope. *)
+  let f = (Obj.magic_portable [@mode once]) f in
+  (* [f] is [unyielding], so returns in bounded time. Therefore, blocking the current
+     thread and becoming unkillable cannot cause deadlocks. *)
+  let await =
+    (Await.Expert.create [@alloc stack])
+      ~sync:Sync.blocking
+      ~terminator:Terminator.unkillable
+  in
+  let concurrent = (Concurrent.create [@mode portable]) await ~scheduler in
+  (Concurrent.spawn_join [@mode unique portable])
+    concurrent
+    ()
+    ~f:(fun _ (parallel : Parallel_kernel.t) concurrent ->
+      Result.Capsule.globalize
+        (Result.Capsule.try_with (fun () -> f parallel concurrent)) [@nontail])
+  |> Result.Capsule.unwrap_ok_exn
+;;

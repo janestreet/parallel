@@ -30,12 +30,16 @@ To receive a `Parallel.t`, a parallel computation must be submitted to a
 separate scheduler library. Schedulers provide the following function:
 
 ```ocaml
-  (** [parallel t ~f] creates an implementation of parallelism backed by [t], applies [f],
-      and waits for it to complete. *)
-  val parallel : t -> f:(parallel @ local -> 'a) @ once shareable -> 'a
+(** [with_parallel ?max_workers f] creates a scheduler that uses up to [max_workers]
+    worker threads, spawns [f] into it, and blocks the current thread until [f] is done
+    executing. Returns the result of [f]. *)
+val with_parallel
+  :  ?max_workers:int (* Default: [Multicore.max_domains ()] *)
+  -> (Parallel_kernel.t @ local -> 'a) @ once
+  -> 'a
 ```
 
-Calling `schedule` provides your parallel computation with a local `Parallel.t`
+Calling `with_parallel` provides your parallel computation with a local `Parallel.t`
 that represents the ability to run parallel tasks on this scheduler.
 
 The currently available schedulers are:
@@ -75,16 +79,9 @@ let rec fib parallel n =
     a + b
 ;;
 
-let fib_sequential n =
-  let scheduler = Parallel.Scheduler.Sequential.create () in
-  Parallel.Scheduler.Sequential.parallel scheduler ~f:(fun parallel ->
-    printf "%d" (fib parallel n))
-;;
+let fib_sequential n = printf "%d" (fib Parallel.sequential n)
 
 let fib_parallel n =
-  let scheduler = Parallel_scheduler.create () in
-  Parallel_scheduler.parallel scheduler ~f:(fun parallel ->
-    printf "%d" (fib parallel n));
-  Parallel_scheduler.stop scheduler
+  Parallel_scheduler.with_parallel (fun parallel -> printf "%d" (fib parallel n))
 ;;
 ```

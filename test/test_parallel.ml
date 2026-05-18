@@ -34,21 +34,19 @@ let rec fib_par parallel n =
     a + b
 ;;
 
-module Test_scheduler (Scheduler : Parallel.Scheduler.S) = struct
-  let scheduler = Scheduler.create ()
-
+module Test_scheduler (Scheduler : Common.Scheduler) = struct
   let%expect_test "fib4" =
-    Scheduler.parallel scheduler ~f:(fun parallel -> printf "%d" (fib4 parallel));
+    Scheduler.parallel (fun parallel -> printf "%d" (fib4 parallel));
     [%expect {| 356 |}]
   ;;
 
   let%expect_test "fib_par" =
-    Scheduler.parallel scheduler ~f:(fun parallel -> printf "%d" (fib_par parallel 10));
+    Scheduler.parallel (fun parallel -> printf "%d" (fib_par parallel 10));
     [%expect {| 89 |}]
   ;;
 
   let%expect_test "f3" =
-    Scheduler.parallel scheduler ~f:(fun parallel ->
+    Scheduler.parallel (fun parallel ->
       let #(a, b, c) =
         Parallel.fork_join3 parallel (fun _ -> 1) (fun _ -> 2) (fun _ -> 3)
       in
@@ -57,7 +55,7 @@ module Test_scheduler (Scheduler : Parallel.Scheduler.S) = struct
   ;;
 
   let%expect_test "f4" =
-    Scheduler.parallel scheduler ~f:(fun parallel ->
+    Scheduler.parallel (fun parallel ->
       let #(a, b, c, d) =
         Parallel.fork_join4 parallel (fun _ -> 1) (fun _ -> 2) (fun _ -> 3) (fun _ -> 4)
       in
@@ -66,7 +64,7 @@ module Test_scheduler (Scheduler : Parallel.Scheduler.S) = struct
   ;;
 
   let%expect_test "f5" =
-    Scheduler.parallel scheduler ~f:(fun parallel ->
+    Scheduler.parallel (fun parallel ->
       let #(a, b, c, d, e) =
         Parallel.fork_join5
           parallel
@@ -81,7 +79,7 @@ module Test_scheduler (Scheduler : Parallel.Scheduler.S) = struct
   ;;
 
   let%expect_test "fN" =
-    Scheduler.parallel scheduler ~f:(fun parallel ->
+    Scheduler.parallel (fun parallel ->
       let [ a; b; c; d; e; f ] =
         Parallel.fork_join
           parallel
@@ -105,7 +103,7 @@ module Test_scheduler (Scheduler : Parallel.Scheduler.S) = struct
   ;;
 
   let%expect_test "for" =
-    Scheduler.parallel scheduler ~f:(fun parallel ->
+    Scheduler.parallel (fun parallel ->
       let a = Atomic.make 0 in
       Parallel.for_ parallel ~start:0 ~stop:10 ~f:(fun _ i -> Atomic.add a i);
       printf "%d" (Atomic.get a));
@@ -113,7 +111,7 @@ module Test_scheduler (Scheduler : Parallel.Scheduler.S) = struct
   ;;
 
   let%expect_test "fold" =
-    Scheduler.parallel scheduler ~f:(fun parallel ->
+    Scheduler.parallel (fun parallel ->
       let fold_n n =
         (Parallel.fold [@kind value_or_null (value_or_null & value_or_null)])
           parallel
@@ -168,7 +166,7 @@ module Test_scheduler (Scheduler : Parallel.Scheduler.S) = struct
         | Node (a, b) -> collect a @ collect b
       ;;
     end in
-    Scheduler.parallel scheduler ~f:(fun parallel ->
+    Scheduler.parallel (fun parallel ->
       let fold_n n =
         (Parallel.fold [@kind value_or_null (value_or_null & value_or_null)])
           parallel
@@ -212,57 +210,55 @@ end
 include Common.Test_schedulers (Test_scheduler)
 
 let%expect_test "sequential ordering" =
-  let scheduler = Parallel.Scheduler.Sequential.create () in
-  Parallel.Scheduler.Sequential.parallel scheduler ~f:(fun parallel ->
-    let _ : _ =
-      Parallel.fork_join2
-        parallel
-        (fun _ -> print_endline "1")
-        (fun _ -> print_endline "2")
-    in
-    print_endline "---";
-    let _ : _ =
-      Parallel.fork_join3
-        parallel
-        (fun _ -> print_endline "1")
-        (fun _ -> print_endline "2")
-        (fun _ -> print_endline "3")
-    in
-    print_endline "---";
-    let _ : _ =
-      Parallel.fork_join4
-        parallel
-        (fun _ -> print_endline "1")
-        (fun _ -> print_endline "2")
-        (fun _ -> print_endline "3")
-        (fun _ -> print_endline "4")
-    in
-    print_endline "---";
-    let _ : _ =
-      Parallel.fork_join5
-        parallel
-        (fun _ -> print_endline "1")
-        (fun _ -> print_endline "2")
-        (fun _ -> print_endline "3")
-        (fun _ -> print_endline "4")
-        (fun _ -> print_endline "5")
-    in
-    print_endline "---";
-    let _ : _ =
-      Parallel.fork_join
-        parallel
-        [ (fun _ -> print_endline "1")
-        ; (fun _ -> print_endline "2")
-        ; (fun _ -> print_endline "3")
-        ; (fun _ -> print_endline "4")
-        ; (fun _ -> print_endline "5")
-        ; (fun _ -> print_endline "6")
-        ; (fun _ -> print_endline "7")
-        ; (fun _ -> print_endline "8")
-        ; (fun _ -> print_endline "9")
-        ]
-    in
-    ());
+  let _ : _ =
+    Parallel.fork_join2
+      Parallel.sequential
+      (fun _ -> print_endline "1")
+      (fun _ -> print_endline "2")
+  in
+  print_endline "---";
+  let _ : _ =
+    Parallel.fork_join3
+      Parallel.sequential
+      (fun _ -> print_endline "1")
+      (fun _ -> print_endline "2")
+      (fun _ -> print_endline "3")
+  in
+  print_endline "---";
+  let _ : _ =
+    Parallel.fork_join4
+      Parallel.sequential
+      (fun _ -> print_endline "1")
+      (fun _ -> print_endline "2")
+      (fun _ -> print_endline "3")
+      (fun _ -> print_endline "4")
+  in
+  print_endline "---";
+  let _ : _ =
+    Parallel.fork_join5
+      Parallel.sequential
+      (fun _ -> print_endline "1")
+      (fun _ -> print_endline "2")
+      (fun _ -> print_endline "3")
+      (fun _ -> print_endline "4")
+      (fun _ -> print_endline "5")
+  in
+  print_endline "---";
+  let _ : _ =
+    Parallel.fork_join
+      Parallel.sequential
+      [ (fun _ -> print_endline "1")
+      ; (fun _ -> print_endline "2")
+      ; (fun _ -> print_endline "3")
+      ; (fun _ -> print_endline "4")
+      ; (fun _ -> print_endline "5")
+      ; (fun _ -> print_endline "6")
+      ; (fun _ -> print_endline "7")
+      ; (fun _ -> print_endline "8")
+      ; (fun _ -> print_endline "9")
+      ]
+  in
+  ();
   [%expect
     {|
     1
