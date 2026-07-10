@@ -26,7 +26,7 @@ let[@inline] globalize = function
 ;;
 
 module Capsule = struct
-  module Capsule = Portable.Capsule.Expert
+  module Capsule = Portable.Capsule.Prim
 
   type 'a t =
     | Ok : ('a, 'k) Capsule.Data.t @@ global many * 'k Capsule.Key.t -> 'a t
@@ -36,7 +36,7 @@ module Capsule = struct
     let (P key) = Capsule.create () in
     try
       let #(result, key) =
-        Capsule.Key.access_local key ~f:(fun [@inline] access ->
+        (Capsule.Key.access [@mode local]) key ~f:(fun [@inline] access ->
           { global = { many = Capsule.Data.wrap ~access (f ()) } })
       in
       Ok (result.global.many, key)

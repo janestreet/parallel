@@ -78,7 +78,7 @@ let create_worker () =
   let sleepy = Await.Awaitable.make ~padded:true false in
   (* NOTE: We're not actually protecting any data in this mutex's capsule; we're just
      using it to synchronize going to sleep and waking up. *)
-  let (P key) = Capsule.Expert.create () in
+  let (P key) = Capsule.Prim.create () in
   let mutex = Sync.Mutex.create key in
   P { queue; sleepy; mutex }
 ;;

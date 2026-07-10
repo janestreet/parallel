@@ -153,8 +153,7 @@ let[@inline] create_fiber t job ~scheduler ~tokens ~key =
   let #({ many = cont }, key) =
     Capsule.Key.access key ~f:(fun [@inline] access ->
       let k =
-        (Wait.Contended.fiber [@alert "-experimental_runtime5"]) (fun handler () ->
-          apply t job ~scheduler ~tokens ~handler)
+        Wait.Contended.fiber (fun handler () -> apply t job ~scheduler ~tokens ~handler)
       in
       { many = Capsule.Data.wrap_unique ~access k })
   in

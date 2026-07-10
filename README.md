@@ -6,13 +6,13 @@
 To expose an opportunity for parallelism, user code calls a `fork_join` function, such as:
 
 ```ocaml
-(** [fork_join2 t f g] runs [f] and [g] as parallel tasks and returns their results. If
-    either task raises, this operation will reraise the leftmost exception after both
-    tasks have completed or raised.
+(** [fork_join2 t f g] runs [f] and [g] as parallel subtasks and returns their results. If
+    either subtask raises, this operation will reraise the leftmost exception after both
+    subtasks have completed or raised.
 
     [f] and [g] are [shareable], so can capture both [shared] and [uncontended]
-    references. This allows the tasks to read (but not mutate) state from the environment.
-    [f] is also [forkable], so cannot capture capsule passwords. *)
+    references. This allows the subtasks to read (but not mutate) state from the
+    environment. [f] is also [forkable], so cannot capture capsule passwords. *)
 val fork_join2
   :  t @ local
   -> (t @ local -> 'a) @ forkable local once shareable
@@ -32,7 +32,11 @@ separate scheduler library. Schedulers provide the following function:
 ```ocaml
 (** [with_parallel ?max_workers f] creates a scheduler that uses up to [max_workers]
     worker threads, spawns [f] into it, and blocks the current thread until [f] is done
-    executing. Returns the result of [f]. *)
+    executing. Returns the result of [f].
+
+    Creating a scheduler is an expensive operation, and should ideally only happen at
+    process startup. Most users should use the functions in the [Parallel_command] library
+    to create their scheduler. *)
 val with_parallel
   :  ?max_workers:int (* Default: [Multicore.max_domains ()] *)
   -> (Parallel_kernel.t @ local -> 'a) @ once

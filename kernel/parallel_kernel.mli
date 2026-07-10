@@ -5,10 +5,10 @@ open! Import
 module Hlist = Hlist
 
 (** [t] is the type of implementations of parallelism. Operations that produce parallel
-    tasks take a [t] that provides an implementation of parallelism for them to use. *)
+    subtasks take a [t] that provides an implementation of parallelism for them to use. *)
 type t : value mod contended non_float portable
 
-(** A trivial implementation of parallelism that runs all tasks sequentially. *)
+(** A trivial implementation of parallelism that runs all subtasks sequentially. *)
 val sequential : t
 
 (** [sync t] is an [Await.Sync.t] that may be used to acquire locks inside parallel
@@ -19,20 +19,20 @@ module Thunk : sig
   type nonrec 'a t = t @ local -> 'a
 end
 
-(** [fork_join t fs] runs the functions in the heterogenous list [f] as parallel tasks and
-    returns their results. If any task raises, this operation will reraise the leftmost
-    exception after all tasks have completed or raised. *)
+(** [fork_join t fs] runs the functions in the heterogenous list [f] as parallel subtasks
+    and returns their results. If any subtask raises, this operation will reraise the
+    leftmost exception after all subtasks have completed or raised. *)
 val fork_join : t @ local -> 'l Hlist.Gen(Thunk).t @ once shareable -> 'l Hlist.t
 
 (* $MDX part-begin=fork_join2 *)
 
-(** [fork_join2 t f g] runs [f] and [g] as parallel tasks and returns their results. If
-    either task raises, this operation will reraise the leftmost exception after both
-    tasks have completed or raised.
+(** [fork_join2 t f g] runs [f] and [g] as parallel subtasks and returns their results. If
+    either subtask raises, this operation will reraise the leftmost exception after both
+    subtasks have completed or raised.
 
     [f] and [g] are [shareable], so can capture both [shared] and [uncontended]
-    references. This allows the tasks to read (but not mutate) state from the environment.
-    [f] is also [forkable], so cannot capture capsule passwords. *)
+    references. This allows the subtasks to read (but not mutate) state from the
+    environment. [f] is also [forkable], so cannot capture capsule passwords. *)
 val fork_join2
   :  t @ local
   -> (t @ local -> 'a) @ forkable local once shareable
@@ -69,14 +69,14 @@ val fork_join5
   -> #('a * 'b * 'c * 'd * 'e)
 
 module Biased : sig
-  (** Like {!fork_join2}, but runs the leftmost task in the current capsule. *)
+  (** Like {!fork_join2}, but runs the leftmost subtask in the current capsule. *)
   val fork_join2
     :  t @ local
     -> (t @ local -> 'a) @ local once
     -> (t @ local -> 'b) @ once portable
     -> #('a * 'b)
 
-  (** Like {!fork_join3}, but runs the leftmost task in the current capsule. *)
+  (** Like {!fork_join3}, but runs the leftmost subtask in the current capsule. *)
   val fork_join3
     :  t @ local
     -> (t @ local -> 'a) @ local once
@@ -84,7 +84,7 @@ module Biased : sig
     -> (t @ local -> 'c) @ once portable
     -> #('a * 'b * 'c)
 
-  (** Like {!fork_join4}, but runs the leftmost task in the current capsule. *)
+  (** Like {!fork_join4}, but runs the leftmost subtask in the current capsule. *)
   val fork_join4
     :  t @ local
     -> (t @ local -> 'a) @ local once
@@ -93,7 +93,7 @@ module Biased : sig
     -> (t @ local -> 'd) @ once portable
     -> #('a * 'b * 'c * 'd)
 
-  (** Like {!fork_join5}, but runs the leftmost task in the current capsule. *)
+  (** Like {!fork_join5}, but runs the leftmost subtask in the current capsule. *)
   val fork_join5
     :  t @ local
     -> (t @ local -> 'a) @ local once
@@ -104,7 +104,7 @@ module Biased : sig
     -> #('a * 'b * 'c * 'd * 'e)
 end
 
-(** [for_ t ~start ~stop ~f] runs [f t i] as a parallel task for each [i] in the range
+(** [for_ t ~start ~stop ~f] runs [f t i] as a parallel subtask for each [i] in the range
     [start..stop-1].
 
     If any invocation of [f] raises, this operation will reraise the leftmost exception.
@@ -145,9 +145,9 @@ val%template fold
   acc = (base_or_null, value_or_null & base_or_null)
   , seq = (base_or_null, value_or_null & value_or_null)]
 
-(** [heartbeat t ~n] allows [n] jobs to be promoted to parallel tasks. If there are fewer
-    than [n] tasks in the current queue, the remaining count will be used to eagerly
-    promote new tasks. If [n < 0], the next [n] promotions will be skipped. *)
+(** [heartbeat t ~n] allows [n] subtasks to be promoted to tasks. If there are fewer than
+    [n] subtasks in the current queue, the remaining count will be used to eagerly promote
+    new subtasks. If [n < 0], the next [n] promotions will be skipped. *)
 val heartbeat : t @ local -> n:int -> unit
 
 module Lazy : Await_sync.Expert.Lazy.S with type capability := t

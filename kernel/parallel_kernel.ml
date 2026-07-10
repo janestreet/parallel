@@ -170,20 +170,22 @@ let[@inline] with_jobs t ~queue ~password f ff = exclave_
   let (P current) = Capsule.current () in
   let f = Capsule.Data.Local.wrap_once ~access:current f in
   let { many = { contended = { forkable = first, rest } } } =
-    Capsule.Password.with_current current (fun [@inline] current -> exclave_
-      let[@inline] f (t : t) =
-        (Capsule.access ~password:current ~f:(fun [@inline] access ->
-           let f = Capsule.Data.Local.unwrap_once ~access f in
-           { aliased_many = Capsule.Data.wrap ~access (f t) }))
-          .aliased_many
-      in
-      { many =
-          { contended =
-              Capsule.access_local ~password ~f:(fun [@inline] access -> exclave_
-                let queue = Capsule.Data.Local.unwrap ~access queue in
-                { forkable = Runqueue.with_jobs queue f ff t })
-          }
-      })
+    (Capsule.Password.with_current [@mode local])
+      current
+      (fun [@inline] current -> exclave_
+         let[@inline] f (t : t) =
+           (Capsule.access ~password:current ~f:(fun [@inline] access ->
+              let f = Capsule.Data.Local.unwrap_once ~access f in
+              { aliased_many = Capsule.Data.wrap ~access (f t) }))
+             .aliased_many
+         in
+         { many =
+             { contended =
+                 Capsule.access_local ~password ~f:(fun [@inline] access -> exclave_
+                   let queue = Capsule.Data.Local.unwrap ~access queue in
+                   { forkable = Runqueue.with_jobs queue f ff t })
+             }
+         })
   in
   #(Result.map ~f:(Capsule.Data.unwrap ~access:current) first, { contended = rest })
 ;;

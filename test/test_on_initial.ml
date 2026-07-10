@@ -3,8 +3,6 @@ open! Async
 open! Import
 open! Await
 
-[@@@alert "-experimental_runtime5"]
-
 let rec fib_par parallel n =
   match n with
   | 0 | 1 -> 1
@@ -48,7 +46,7 @@ let%expect_test "thread" =
   return ()
 ;;
 
-let%expect_test ("async" [@tags "runtime5-only"]) =
+let%expect_test "async" =
   let run ~max_workers =
     let scheduler =
       Parallel_scheduler.scheduler
@@ -77,7 +75,7 @@ let%expect_test ("async" [@tags "runtime5-only"]) =
   return ()
 ;;
 
-let%expect_test ("async spawn_join" [@tags "runtime5-only"]) =
+let%expect_test "async spawn_join" =
   let run ~max_workers =
     let scheduler =
       Parallel_scheduler.scheduler

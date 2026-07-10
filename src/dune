@@ -1,7 +1,7 @@
 (library
  (name parallel)
  (public_name parallel)
- (libraries await await.sync parallel_arrays parallel_capsule parallel_kernel
-   parallel_map parallel_sequence)
+ (libraries parallel_arrays parallel_capsule parallel_kernel parallel_map
+   parallel_sequence)
  (preprocess
   (pps ppx_jane)))

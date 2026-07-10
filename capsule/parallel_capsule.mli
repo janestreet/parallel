@@ -75,7 +75,7 @@ module Mutex : sig
       -> 'k t @ local
       -> f:
            (Parallel_kernel.t @ local
-            -> 'k Capsule.Expert.Access.t
+            -> 'k Capsule.Prim.Access.t
             -> 'a @ contended once portable unique)
          @ local once portable unyielding
       -> 'a @ contended once portable unique
@@ -86,7 +86,7 @@ module Mutex : sig
       -> 'k t @ local
       -> f:
            (Parallel_kernel.t @ local
-            -> 'k Capsule.Expert.Access.t
+            -> 'k Capsule.Prim.Access.t
             -> 'a @ contended portable unique)
          @ local once portable unyielding
       -> 'a @ contended once portable unique
@@ -98,7 +98,7 @@ module Mutex : sig
       -> 'k t @ local
       -> f:
            (Parallel_kernel.t @ local
-            -> 'k Capsule.Expert.Access.t
+            -> 'k Capsule.Prim.Access.t
             -> 'a @ contended portable unique)
          @ local once portable unyielding
       -> 'a Or_canceled.t @ contended once portable unique
@@ -110,7 +110,7 @@ module Mutex : sig
       -> 'k t @ local
       -> f:
            (Parallel_kernel.t @ local
-            -> 'k Capsule.Expert.Access.t
+            -> 'k Capsule.Prim.Access.t
             -> 'a @ contended portable unique)
          @ local once portable unyielding
       -> 'a Or_canceled.t @ contended once portable unique
@@ -121,7 +121,7 @@ module Mutex : sig
       -> 'k t @ local
       -> f:
            (Parallel_kernel.t @ local
-            -> 'k Capsule.Expert.Password.t @ local
+            -> 'k Capsule.Prim.Password.t @ local
             -> 'a @ unique)
          @ local once unyielding
       -> 'a @ unique
@@ -132,7 +132,7 @@ module Mutex : sig
       -> 'k t @ local
       -> f:
            (Parallel_kernel.t @ local
-            -> 'k Capsule.Expert.Password.t @ local
+            -> 'k Capsule.Prim.Password.t @ local
             -> 'a @ unique)
          @ local once unyielding
       -> 'a @ unique
@@ -144,7 +144,7 @@ module Mutex : sig
       -> 'k t @ local
       -> f:
            (Parallel_kernel.t @ local
-            -> 'k Capsule.Expert.Password.t @ local
+            -> 'k Capsule.Prim.Password.t @ local
             -> 'a @ unique)
          @ local once unyielding
       -> 'a Or_canceled.t @ unique
@@ -156,13 +156,13 @@ module Mutex : sig
       -> 'k t @ local
       -> f:
            (Parallel_kernel.t @ local
-            -> 'k Capsule.Expert.Password.t @ local
+            -> 'k Capsule.Prim.Password.t @ local
             -> 'a @ unique)
          @ local once unyielding
       -> 'a Or_canceled.t @ unique
 
     [%%template:
-    [@@@alloc.default a @ l = (heap_global, stack_local)]
+    [@@@mode.default l = (global, local)]
 
     val with_key_poisoning
       : ('a : value_or_null) 'k.
@@ -170,8 +170,8 @@ module Mutex : sig
       -> 'k t @ local
       -> f:
            (Parallel_kernel.t @ local
-            -> 'k Capsule.Expert.Key.t @ unique
-            -> #('a * 'k Capsule.Expert.Key.t) @ l once unique)
+            -> 'k Capsule.Prim.Key.t @ unique
+            -> #('a * 'k Capsule.Prim.Key.t) @ l once unique)
          @ local once unyielding
       -> 'a @ l once unique
 
@@ -182,8 +182,8 @@ module Mutex : sig
       -> 'k t @ local
       -> f:
            (Parallel_kernel.t @ local
-            -> 'k Capsule.Expert.Key.t @ unique
-            -> #('a * 'k Capsule.Expert.Key.t) @ l once unique)
+            -> 'k Capsule.Prim.Key.t @ unique
+            -> #('a * 'k Capsule.Prim.Key.t) @ l once unique)
          @ local once unyielding
       -> 'a Or_canceled.t @ l once unique]
   end
@@ -433,7 +433,7 @@ module Rwlock : sig
       -> 'k t @ local
       -> f:
            (Parallel_kernel.t @ local
-            -> 'k Capsule.Expert.Access.t @ shared
+            -> 'k Capsule.Prim.Access.t @ shared
             -> 'a @ contended once portable unique)
          @ local once portable unyielding
       -> 'a @ contended once portable unique
@@ -444,7 +444,7 @@ module Rwlock : sig
       -> 'k t @ local
       -> f:
            (Parallel_kernel.t @ local
-            -> 'k Capsule.Expert.Access.t @ shared
+            -> 'k Capsule.Prim.Access.t @ shared
             -> 'a @ contended once portable unique)
          @ local once portable unyielding
       -> 'a @ contended once portable unique
@@ -456,7 +456,7 @@ module Rwlock : sig
       -> 'k t @ local
       -> f:
            (Parallel_kernel.t @ local
-            -> 'k Capsule.Expert.Access.t @ shared
+            -> 'k Capsule.Prim.Access.t @ shared
             -> 'a @ contended once portable unique)
          @ local once portable unyielding
       -> 'a Or_canceled.t @ contended once portable unique
@@ -468,7 +468,7 @@ module Rwlock : sig
       -> 'k t @ local
       -> f:
            (Parallel_kernel.t @ local
-            -> 'k Capsule.Expert.Access.t @ shared
+            -> 'k Capsule.Prim.Access.t @ shared
             -> 'a @ contended once portable unique)
          @ local once portable unyielding
       -> 'a Or_canceled.t @ contended once portable unique
@@ -479,7 +479,7 @@ module Rwlock : sig
       -> 'k t @ local
       -> f:
            (Parallel_kernel.t @ local
-            -> 'k Capsule.Expert.Access.t
+            -> 'k Capsule.Prim.Access.t
             -> 'a @ contended once portable unique)
          @ local once portable unyielding
       -> 'a @ contended once portable unique
@@ -490,7 +490,7 @@ module Rwlock : sig
       -> 'k t @ local
       -> f:
            (Parallel_kernel.t @ local
-            -> 'k Capsule.Expert.Access.t
+            -> 'k Capsule.Prim.Access.t
             -> 'a @ contended once portable unique)
          @ local once portable unyielding
       -> 'a @ contended once portable unique
@@ -502,7 +502,7 @@ module Rwlock : sig
       -> 'k t @ local
       -> f:
            (Parallel_kernel.t @ local
-            -> 'k Capsule.Expert.Access.t
+            -> 'k Capsule.Prim.Access.t
             -> 'a @ contended once portable unique)
          @ local once portable unyielding
       -> 'a Or_canceled.t @ contended once portable unique
@@ -514,7 +514,7 @@ module Rwlock : sig
       -> 'k t @ local
       -> f:
            (Parallel_kernel.t @ local
-            -> 'k Capsule.Expert.Access.t
+            -> 'k Capsule.Prim.Access.t
             -> 'a @ contended once portable unique)
          @ local once portable unyielding
       -> 'a Or_canceled.t @ contended once portable unique
@@ -525,7 +525,7 @@ module Rwlock : sig
       -> 'k t @ local
       -> f:
            (Parallel_kernel.t @ local
-            -> 'k Capsule.Expert.Password.Shared.t @ forkable local
+            -> 'k Capsule.Prim.Password.Shared.t @ forkable local
             -> 'a @ unique)
          @ local once unyielding
       -> 'a @ unique
@@ -536,7 +536,7 @@ module Rwlock : sig
       -> 'k t @ local
       -> f:
            (Parallel_kernel.t @ local
-            -> 'k Capsule.Expert.Password.Shared.t @ forkable local
+            -> 'k Capsule.Prim.Password.Shared.t @ forkable local
             -> 'a @ unique)
          @ local once unyielding
       -> 'a @ unique
@@ -548,7 +548,7 @@ module Rwlock : sig
       -> 'k t @ local
       -> f:
            (Parallel_kernel.t @ local
-            -> 'k Capsule.Expert.Password.Shared.t @ forkable local
+            -> 'k Capsule.Prim.Password.Shared.t @ forkable local
             -> 'a @ unique)
          @ local once unyielding
       -> 'a Or_canceled.t @ unique
@@ -560,7 +560,7 @@ module Rwlock : sig
       -> 'k t @ local
       -> f:
            (Parallel_kernel.t @ local
-            -> 'k Capsule.Expert.Password.Shared.t @ forkable local
+            -> 'k Capsule.Prim.Password.Shared.t @ forkable local
             -> 'a @ unique)
          @ local once unyielding
       -> 'a Or_canceled.t @ unique
@@ -571,7 +571,7 @@ module Rwlock : sig
       -> 'k t @ local
       -> f:
            (Parallel_kernel.t @ local
-            -> 'k Capsule.Expert.Password.t @ local
+            -> 'k Capsule.Prim.Password.t @ local
             -> 'a @ unique)
          @ local once unyielding
       -> 'a @ unique
@@ -582,7 +582,7 @@ module Rwlock : sig
       -> 'k t @ local
       -> f:
            (Parallel_kernel.t @ local
-            -> 'k Capsule.Expert.Password.t @ local
+            -> 'k Capsule.Prim.Password.t @ local
             -> 'a @ unique)
          @ local once unyielding
       -> 'a @ unique
@@ -594,7 +594,7 @@ module Rwlock : sig
       -> 'k t @ local
       -> f:
            (Parallel_kernel.t @ local
-            -> 'k Capsule.Expert.Password.t @ local
+            -> 'k Capsule.Prim.Password.t @ local
             -> 'a @ unique)
          @ local once unyielding
       -> 'a Or_canceled.t @ unique
@@ -606,13 +606,13 @@ module Rwlock : sig
       -> 'k t @ local
       -> f:
            (Parallel_kernel.t @ local
-            -> 'k Capsule.Expert.Password.t @ local
+            -> 'k Capsule.Prim.Password.t @ local
             -> 'a @ unique)
          @ local once unyielding
       -> 'a Or_canceled.t @ unique
 
     [%%template:
-    [@@@alloc.default a @ l = (heap_global, stack_local)]
+    [@@@mode.default l = (global, local)]
 
     val with_key_poisoning
       : ('a : value_or_null) 'k.
@@ -620,8 +620,8 @@ module Rwlock : sig
       -> 'k t @ local
       -> f:
            (Parallel_kernel.t @ local
-            -> 'k Capsule.Expert.Key.t @ unique
-            -> #('a * 'k Capsule.Expert.Key.t) @ l once unique)
+            -> 'k Capsule.Prim.Key.t @ unique
+            -> #('a * 'k Capsule.Prim.Key.t) @ l once unique)
          @ local once unyielding
       -> 'a @ l once unique
 
@@ -632,8 +632,8 @@ module Rwlock : sig
       -> 'k t @ local
       -> f:
            (Parallel_kernel.t @ local
-            -> 'k Capsule.Expert.Key.t @ unique
-            -> #('a * 'k Capsule.Expert.Key.t) @ l once unique)
+            -> 'k Capsule.Prim.Key.t @ unique
+            -> #('a * 'k Capsule.Prim.Key.t) @ l once unique)
          @ local once unyielding
       -> 'a Or_canceled.t @ l once unique]
   end

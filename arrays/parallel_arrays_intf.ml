@@ -740,7 +740,9 @@ module type Parallel_arrays = sig @@ portable
     [@@unboxed]
 
     (** Wraps a [Bigarray.Array1.t] as a parallel bigarray. *)
-    val%template of_bigarray : ('a, _, _) Bigarray.Array1.t @ m -> 'a t @ m
+    val%template of_bigarray
+      : ('a : any) ('b : any) ('c : any).
+      ('a, 'b, 'c) Bigarray.Array1.t @ m -> 'a t @ m
     [@@mode m = (uncontended, shared)]
 
     (** Wraps a [Bigarray.kind] and [Bigarray.layout] as a parallel bigarray spec. *)

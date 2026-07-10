@@ -126,27 +126,29 @@ module Mutex = struct
     ;;
 
     [%%template
-    [@@@alloc.default a @ l = (heap_global, stack_local)]
+    [@@@mode.default l = (global, local)]
 
     let with_key_poisoning parallel t ~f =
       (let parallel = magic_unyielding_parallel parallel in
-       (Sync.Mutex.with_key_poisoning [@alloc a])
+       (Sync.Mutex.with_key_poisoning [@mode l])
          (Parallel_kernel.sync parallel)
          t
-         ~f:(fun _sync key -> f parallel key [@exclave_if_stack a])
+         ~f:(fun _sync key ->
+           f parallel key [@exclave_if_local l ~reasons:[ May_return_local ]])
        [@nontail])
-      [@exclave_if_stack a]
+      [@exclave_if_local l ~reasons:[ May_return_local ]]
     ;;
 
     let with_key_or_cancel_poisoning parallel cancellation t ~f =
       (let parallel = magic_unyielding_parallel parallel in
-       (Sync.Mutex.with_key_or_cancel_poisoning [@alloc a])
+       (Sync.Mutex.with_key_or_cancel_poisoning [@mode l])
          (Parallel_kernel.sync parallel)
          cancellation
          t
-         ~f:(fun _sync key -> f parallel key [@exclave_if_stack a])
+         ~f:(fun _sync key ->
+           f parallel key [@exclave_if_local l ~reasons:[ May_return_local ]])
        [@nontail])
-      [@exclave_if_stack a]
+      [@exclave_if_local l ~reasons:[ May_return_local ]]
     ;;]
   end
 end
@@ -441,27 +443,29 @@ module Rwlock = struct
     ;;
 
     [%%template
-    [@@@alloc.default a @ l = (heap_global, stack_local)]
+    [@@@mode.default l = (global, local)]
 
     let with_key_poisoning parallel t ~f =
       (let parallel = magic_unyielding_parallel parallel in
-       (Sync.Rwlock.with_key_poisoning [@alloc a])
+       (Sync.Rwlock.with_key_poisoning [@mode l])
          (Parallel_kernel.sync parallel)
          t
-         ~f:(fun _sync key -> f parallel key [@exclave_if_stack a])
+         ~f:(fun _sync key ->
+           f parallel key [@exclave_if_local l ~reasons:[ May_return_local ]])
        [@nontail])
-      [@exclave_if_stack a]
+      [@exclave_if_local l ~reasons:[ May_return_local ]]
     ;;
 
     let with_key_or_cancel_poisoning parallel cancellation t ~f =
       (let parallel = magic_unyielding_parallel parallel in
-       (Sync.Rwlock.with_key_or_cancel_poisoning [@alloc a])
+       (Sync.Rwlock.with_key_or_cancel_poisoning [@mode l])
          (Parallel_kernel.sync parallel)
          cancellation
          t
-         ~f:(fun _sync key -> f parallel key [@exclave_if_stack a])
+         ~f:(fun _sync key ->
+           f parallel key [@exclave_if_local l ~reasons:[ May_return_local ]])
        [@nontail])
-      [@exclave_if_stack a]
+      [@exclave_if_local l ~reasons:[ May_return_local ]]
     ;;]
   end
 end

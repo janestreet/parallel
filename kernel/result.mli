@@ -14,7 +14,7 @@ val map : 'a t @ local unique -> f:('a -> 'b) @ local once -> 'b t @ local uniqu
 val globalize : 'a t @ local unique -> 'a t @ unique
 
 module Capsule : sig
-  module Capsule := Portable.Capsule.Expert
+  module Capsule := Portable.Capsule.Prim
 
   type 'a t =
     | Ok : ('a, 'k) Capsule.Data.t @@ global many * 'k Capsule.Key.t -> 'a t
